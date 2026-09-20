@@ -50,6 +50,14 @@
   },
   "author": "cond",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/litepacks/softscope.git"
+  },
+  "homepage": "https://github.com/litepacks/softscope#readme",
+  "bugs": {
+    "url": "https://github.com/litepacks/softscope/issues"
+  },
   "dependencies": {
     "magic-string": "^1.4.1",
     "oxc-parser": "^0.150.0",
