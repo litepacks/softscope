@@ -1,0 +1,23 @@
+# Test suites and fixtures
+test/
+fixtures/
+
+# Benchmarks and demo apps
+bench/
+demo/
+scratch/
+
+# Agent and internal specifications
+.agents/
+AGENTS.md
+
+# Development and Git configuration
+.git/
+.gitignore
+.github/
+
+# Logs and OS artifacts
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db

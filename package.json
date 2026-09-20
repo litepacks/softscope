@@ -1,0 +1,48 @@
+{
+  "name": "softscope",
+  "version": "0.1.1",
+  "description": "Lightweight Node.js CLI profiler for benchmarks and performance suites: function execution frequency, self/total duration, call graphs, and runtime reach",
+  "type": "module",
+  "bin": {
+    "softscope": "bin/softscope.js"
+  },
+  "main": "./src/cli.js",
+  "exports": {
+    ".": "./src/cli.js",
+    "./loader": "./src/loader/register.js",
+    "./hooks": "./src/loader/hooks.mjs",
+    "./vite": "./src/vite/index.js",
+    "./client": "./src/vite/client.js"
+  },
+  "peerDependencies": {
+    "vite": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "vite": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "bench": "node bench/run.js"
+  },
+  "keywords": [
+    "profiler",
+    "observability",
+    "instrumentation",
+    "oxc",
+    "metrics",
+    "runtime",
+    "reach"
+  ],
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "author": "cond",
+  "license": "MIT",
+  "dependencies": {
+    "magic-string": "^1.4.1",
+    "oxc-parser": "^0.150.0",
+    "picomatch": "^4.0.2"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "softscope-demo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Ready-to-run demo application showcasing Softscope telemetry, nested call trees, terminal tables, and Markdown reports",
+  "scripts": {
+    "start": "node server.js",
+    "dev:perf": "softscope node server.js",
+    "batch": "node index.js",
+    "batch:perf": "softscope index.js",
+    "batch:files": "softscope index.js --files",
+    "batch:md": "softscope index.js --md",
+    "batch:out": "softscope index.js -o report.md"
+  }
+}
