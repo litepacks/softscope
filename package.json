@@ -7,12 +7,22 @@
     "softscope": "bin/softscope.js"
   },
   "main": "./src/cli.js",
+  "types": "./index.d.ts",
   "exports": {
-    ".": "./src/cli.js",
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./src/cli.js"
+    },
+    "./vite": {
+      "types": "./vite.d.ts",
+      "default": "./src/vite/index.js"
+    },
+    "./client": {
+      "types": "./client.d.ts",
+      "default": "./src/vite/client.js"
+    },
     "./loader": "./src/loader/register.js",
-    "./hooks": "./src/loader/hooks.mjs",
-    "./vite": "./src/vite/index.js",
-    "./client": "./src/vite/client.js"
+    "./hooks": "./src/loader/hooks.mjs"
   },
   "peerDependencies": {
     "vite": ">=4.0.0"
