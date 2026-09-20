@@ -25,6 +25,9 @@ export function parseCliArgs(rawArgs, cwd = process.cwd()) {
     exclude: [],
     includeNodeModules: false,
     strict: false,
+    saveBaseline: null,
+    compare: null,
+    failOnRegression: null,
     help: false,
     version: false,
     projectRoot: path.resolve(cwd),
@@ -104,6 +107,29 @@ export function parseCliArgs(rawArgs, cwd = process.cwd()) {
       i += 2;
     } else if (arg.startsWith('--exclude=')) {
       options.exclude.push(arg.slice('--exclude='.length));
+      i++;
+    } else if (arg === '--save-baseline') {
+      options.saveBaseline = rawArgs[i + 1] ? path.resolve(cwd, rawArgs[i + 1]) : null;
+      i += 2;
+    } else if (arg.startsWith('--save-baseline=')) {
+      options.saveBaseline = path.resolve(cwd, arg.slice('--save-baseline='.length));
+      i++;
+    } else if (arg === '--compare' || arg === '--baseline') {
+      options.compare = rawArgs[i + 1] ? path.resolve(cwd, rawArgs[i + 1]) : null;
+      i += 2;
+    } else if (arg.startsWith('--compare=')) {
+      options.compare = path.resolve(cwd, arg.slice('--compare='.length));
+      i++;
+    } else if (arg.startsWith('--baseline=')) {
+      options.compare = path.resolve(cwd, arg.slice('--baseline='.length));
+      i++;
+    } else if (arg === '--fail-on-regression') {
+      const val = parseFloat(rawArgs[i + 1]);
+      options.failOnRegression = !isNaN(val) ? val : 10;
+      i += 2;
+    } else if (arg.startsWith('--fail-on-regression=')) {
+      const val = parseFloat(arg.slice('--fail-on-regression='.length));
+      options.failOnRegression = !isNaN(val) ? val : 10;
       i++;
     } else {
       command.push(arg);

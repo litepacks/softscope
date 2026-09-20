@@ -383,6 +383,10 @@ __softscope.toggleOverlay();
 
 | Flag | Description |
 |------|-------------|
+| `--save-baseline <file>` | Save execution metrics as baseline JSON profile |
+| `--compare <file>`, `--baseline` | Compare current execution against baseline JSON profile |
+| `compare <base> <curr>` | Compare two saved JSON profiles offline |
+| `--fail-on-regression <n>` | Exit with code 1 if any function regresses by > n% (default: 10) |
 | `--ai`, `--llm` | Output token-efficient diagnostic profile optimized for AI agents & LLMs |
 | `--tui` | Launch zero-dependency interactive Terminal User Interface (TUI) |
 | `--live` | Display periodic live statistics in terminal while the process runs |

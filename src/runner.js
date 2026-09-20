@@ -11,6 +11,14 @@ import { renderMarkdownReport } from './report/markdown.js';
 import { renderAiReport } from './report/ai.js';
 import { createLiveReporter } from './report/live.js';
 import { createTui } from './report/tui.js';
+import {
+  loadBaseline,
+  computeDelta,
+  renderCompareTerminalReport,
+  renderCompareMarkdownReport,
+  renderCompareAiReport,
+  renderCompareJsonReport
+} from './report/compare.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REGISTER_PATH = path.resolve(__dirname, 'loader', 'register.js');
@@ -193,22 +201,61 @@ export async function runCommand(options) {
       // Aggregate metrics
       const summary = mergeSessionSnapshots(snapshots, overallDurationMs);
 
+      // Save baseline if requested
+      if (options.saveBaseline) {
+        try {
+          const jsonBaseline = renderJsonReport(summary);
+          fs.writeFileSync(options.saveBaseline, jsonBaseline, 'utf-8');
+        } catch (err) {
+          console.error(`[softscope] Failed to save baseline to ${options.saveBaseline}: ${err.message}`);
+        }
+      }
+
+      // If comparison requested
+      let compareDelta = null;
+      if (options.compare) {
+        try {
+          const baselineData = loadBaseline(options.compare);
+          compareDelta = computeDelta(baselineData, summary, {
+            projectRoot: options.projectRoot,
+            threshold: options.failOnRegression != null ? options.failOnRegression : 10
+          });
+        } catch (err) {
+          console.error(`[softscope] Comparison failed: ${err.message}`);
+        }
+      }
+
       // Output to file if requested
       if (options.output) {
         let fileContent;
-        if (options.ai || options.output.endsWith('.ai') || options.output.endsWith('.llm')) {
-          fileContent = renderAiReport(summary, {
-            top: options.top,
-            files: options.files,
-            targetCommand: options.command.join(' ')
-          });
-        } else if (options.md || options.output.endsWith('.md')) {
-          fileContent = renderMarkdownReport(summary, {
-            top: options.top,
-            files: options.files
-          });
+        if (compareDelta) {
+          if (options.ai || options.output.endsWith('.ai') || options.output.endsWith('.llm')) {
+            fileContent = renderCompareAiReport(compareDelta, {
+              top: options.top,
+              targetCommand: options.command.join(' ')
+            });
+          } else if (options.md || options.output.endsWith('.md')) {
+            fileContent = renderCompareMarkdownReport(compareDelta, {
+              top: options.top
+            });
+          } else {
+            fileContent = renderCompareJsonReport(compareDelta);
+          }
         } else {
-          fileContent = renderJsonReport(summary);
+          if (options.ai || options.output.endsWith('.ai') || options.output.endsWith('.llm')) {
+            fileContent = renderAiReport(summary, {
+              top: options.top,
+              files: options.files,
+              targetCommand: options.command.join(' ')
+            });
+          } else if (options.md || options.output.endsWith('.md')) {
+            fileContent = renderMarkdownReport(summary, {
+              top: options.top,
+              files: options.files
+            });
+          } else {
+            fileContent = renderJsonReport(summary);
+          }
         }
 
         try {
@@ -226,6 +273,11 @@ export async function runCommand(options) {
         exitCode = 128 + 15; // SIGTERM default
       }
 
+      // Check regression threshold if exit code was 0
+      if (exitCode === 0 && compareDelta && options.failOnRegression != null && compareDelta.thresholdBreached) {
+        exitCode = 1;
+      }
+
       if (tui) {
         tui.finish(summary, exitCode);
         tui.onExit((finalCode) => {
@@ -233,28 +285,51 @@ export async function runCommand(options) {
         });
       } else {
         // Output to stdout for non-TUI runs
-        if (options.json) {
-          const jsonOutput = renderJsonReport(summary);
-          process.stdout.write(jsonOutput + '\n');
-        } else if (options.ai) {
-          const aiOutput = renderAiReport(summary, {
-            top: options.top,
-            files: options.files,
-            targetCommand: options.command.join(' ')
-          });
-          process.stdout.write('\n' + aiOutput + '\n');
-        } else if (options.md) {
-          const mdOutput = renderMarkdownReport(summary, {
-            top: options.top,
-            files: options.files
-          });
-          process.stdout.write('\n' + mdOutput + '\n');
+        if (compareDelta) {
+          if (options.json) {
+            const jsonOutput = renderCompareJsonReport(compareDelta);
+            process.stdout.write(jsonOutput + '\n');
+          } else if (options.ai) {
+            const aiOutput = renderCompareAiReport(compareDelta, {
+              top: options.top,
+              targetCommand: options.command.join(' ')
+            });
+            process.stdout.write('\n' + aiOutput + '\n');
+          } else if (options.md) {
+            const mdOutput = renderCompareMarkdownReport(compareDelta, {
+              top: options.top
+            });
+            process.stdout.write('\n' + mdOutput + '\n');
+          } else {
+            const textReport = renderCompareTerminalReport(compareDelta, {
+              top: options.top
+            });
+            process.stdout.write('\n' + textReport + '\n');
+          }
         } else {
-          const textReport = renderTerminalReport(summary, {
-            top: options.top,
-            files: options.files
-          });
-          process.stdout.write('\n' + textReport + '\n');
+          if (options.json) {
+            const jsonOutput = renderJsonReport(summary);
+            process.stdout.write(jsonOutput + '\n');
+          } else if (options.ai) {
+            const aiOutput = renderAiReport(summary, {
+              top: options.top,
+              files: options.files,
+              targetCommand: options.command.join(' ')
+            });
+            process.stdout.write('\n' + aiOutput + '\n');
+          } else if (options.md) {
+            const mdOutput = renderMarkdownReport(summary, {
+              top: options.top,
+              files: options.files
+            });
+            process.stdout.write('\n' + mdOutput + '\n');
+          } else {
+            const textReport = renderTerminalReport(summary, {
+              top: options.top,
+              files: options.files
+            });
+            process.stdout.write('\n' + textReport + '\n');
+          }
         }
 
         resolve(exitCode);
@@ -286,20 +361,110 @@ export async function runCommand(options) {
   });
 }
 
+export function runStandaloneCompare(options) {
+  const args = options.command.slice(1);
+  if (args.length < 2) {
+    console.error('[softscope] Error: compare requires two JSON profile files.');
+    console.error('Usage: softscope compare <baseline.json> <current.json> [options]');
+    return 1;
+  }
+
+  const baseFile = path.resolve(options.projectRoot, args[0]);
+  const currFile = path.resolve(options.projectRoot, args[1]);
+
+  let baseData;
+  let currData;
+  try {
+    baseData = loadBaseline(baseFile);
+  } catch (err) {
+    console.error(`[softscope] ${err.message}`);
+    return 1;
+  }
+
+  try {
+    currData = loadBaseline(currFile);
+  } catch (err) {
+    console.error(`[softscope] ${err.message}`);
+    return 1;
+  }
+
+  const threshold = options.failOnRegression != null ? options.failOnRegression : 10;
+  const compareDelta = computeDelta(baseData, currData, {
+    projectRoot: options.projectRoot,
+    threshold
+  });
+
+  if (options.output) {
+    let fileContent;
+    if (options.ai || options.output.endsWith('.ai') || options.output.endsWith('.llm')) {
+      fileContent = renderCompareAiReport(compareDelta, {
+        top: options.top,
+        targetCommand: `compare ${args[0]} ${args[1]}`
+      });
+    } else if (options.md || options.output.endsWith('.md')) {
+      fileContent = renderCompareMarkdownReport(compareDelta, {
+        top: options.top
+      });
+    } else {
+      fileContent = renderCompareJsonReport(compareDelta);
+    }
+
+    try {
+      fs.writeFileSync(options.output, fileContent, 'utf-8');
+    } catch (err) {
+      console.error(`[softscope] Failed to write report to ${options.output}: ${err.message}`);
+    }
+  }
+
+  if (options.json) {
+    const jsonOutput = renderCompareJsonReport(compareDelta);
+    process.stdout.write(jsonOutput + '\n');
+  } else if (options.ai) {
+    const aiOutput = renderCompareAiReport(compareDelta, {
+      top: options.top,
+      targetCommand: `compare ${args[0]} ${args[1]}`
+    });
+    process.stdout.write('\n' + aiOutput + '\n');
+  } else if (options.md) {
+    const mdOutput = renderCompareMarkdownReport(compareDelta, {
+      top: options.top
+    });
+    process.stdout.write('\n' + mdOutput + '\n');
+  } else {
+    const textReport = renderCompareTerminalReport(compareDelta, {
+      top: options.top
+    });
+    process.stdout.write('\n' + textReport + '\n');
+  }
+
+  if (options.failOnRegression != null && compareDelta.thresholdBreached) {
+    return 1;
+  }
+  return 0;
+}
+
 export function printHelp() {
   const helpText = `
 Usage:
   softscope <file>
   softscope <command> [...args]
+  softscope compare <baseline.json> <current.json>
 
 Examples:
   softscope app.js
   softscope bench/run.js
+  softscope bench/run.js --save-baseline baseline.json
+  softscope bench/run.js --compare baseline.json
+  softscope compare base.json current.json --md
   softscope --tui bench/run.js
   softscope --md bench/run.js
   softscope -o report.md app.js
 
 Options:
+  --save-baseline <file>   Save execution metrics as baseline JSON profile
+  --compare <file>         Compare current execution against baseline JSON profile
+  --baseline <file>        Alias for --compare
+  --fail-on-regression <n> Exit with code 1 if any function regresses by > n% (default: 10)
   --tui                    Launch interactive Terminal User Interface (TUI)
   --ai, --llm              Output token-efficient AI/LLM diagnostic report to stdout
   --live                   Display lightweight live metrics while process runs

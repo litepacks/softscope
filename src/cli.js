@@ -1,5 +1,5 @@
 import { parseCliArgs } from './config.js';
-import { runCommand, printHelp } from './runner.js';
+import { runCommand, runStandaloneCompare, printHelp } from './runner.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +23,10 @@ export async function main(argv = process.argv.slice(2)) {
       console.log('softscope v0.1.0');
     }
     return 0;
+  }
+
+  if (options.command[0] === 'compare') {
+    return runStandaloneCompare(options);
   }
 
   return runCommand(options);

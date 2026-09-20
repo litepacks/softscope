@@ -58,6 +58,7 @@ softscope/
 │   │   ├── client.js         # Browser client singleton (window.__softscope API, snapshot, reset)
 │   │   └── overlay.js        # Zero-dependency in-browser floating HUD badge & ShadowRoot diagnostics drawer
 │   └── report/
+│       ├── compare.js        # Performance comparison engine and delta report renderers
 │       ├── format.js         # Duration/number formatters and terminal table rendering
 │       ├── markdown.js       # GitHub Flavored Markdown (GFM) report generator
 │       ├── ai.js             # Token-efficient LLM diagnostics and actionable directives
@@ -68,6 +69,7 @@ softscope/
 ├── test/
 │   ├── cli.test.js           # CLI end-to-end and exit code propagation tests
 │   ├── collector.test.js     # Unit tests for TypedArray accumulator & stack edge calculations
+│   ├── compare.test.js       # Unit and CLI tests for baseline capture, compare & threshold gating
 │   ├── filter.test.js        # Path filter and glob boundary tests
 │   ├── markdown.test.js      # Markdown table formatting & CLI flag tests
 │   ├── tui.test.js           # Interactive TUI state machine and rendering tests
@@ -101,12 +103,15 @@ When modifying or extending this codebase, adhere to these rules:
    - The interactive web UI and HTTP/SSE server were intentionally removed in favor of direct CLI terminal and GitHub Flavored Markdown reports.
    - Do **not** re-introduce web servers or UI dependencies.
 
-4. **Reporting Conventions**:
+4. **Reporting & Comparison Conventions**:
    - Default output: Terminal tables (`renderTerminalReport`).
    - TUI output: Triggered by `--tui` using zero-dependency native ANSI terminal buffers (`createTui`).
    - AI / LLM output: Triggered by `--ai`, `--llm`, or when `--output` specifies `.ai` or `.llm` (`renderAiReport`).
    - Markdown output: Triggered by `--md`, `--markdown`, or when `--output` specifies a `.md` extension (`renderMarkdownReport`).
    - JSON output: Triggered by `--json` or when `--output` specifies a `.json` extension (`renderJsonReport`).
+   - Baseline capture: Triggered by `--save-baseline <file>`.
+   - Performance comparison: Triggered by `--compare <file>` (or `--baseline <file>`) during execution, or via standalone `softscope compare <base.json> <curr.json>`.
+   - Automated gating: Triggered by `--fail-on-regression <threshold%>` (exits with code 1 if any function regresses beyond threshold).
    - File-level summary: Included only when `--files` is explicitly supplied.
 
 5. **Benchmark-First Focus**:
@@ -134,6 +139,15 @@ npm run bench
 
 # Run a sample fixture with standard terminal output
 softscope fixtures/simple/index.js
+
+# Save a baseline JSON profile
+softscope bench/run.js --save-baseline baseline.json
+
+# Compare current benchmark execution against saved baseline
+softscope bench/run.js --compare baseline.json
+
+# Compare two saved profiles offline with Markdown output
+softscope compare baseline.json current.json --md
 
 # Run a sample fixture with AI/LLM diagnostic output
 softscope fixtures/simple/index.js --ai

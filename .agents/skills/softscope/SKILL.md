@@ -36,6 +36,27 @@ softscope bench/run.js -o profile.ai
 softscope bench/run.js -o BENCHMARK.md
 ```
 
+### Run Baseline Capture & Performance Comparison
+```bash
+# Save execution metrics as a baseline profile
+softscope bench/run.js --save-baseline baseline.json
+
+# Compare current benchmark execution against saved baseline
+softscope bench/run.js --compare baseline.json
+
+# Compare with Markdown output (ideal for GitHub PR comments)
+softscope bench/run.js --compare baseline.json --md
+
+# Compare with AI diagnostic delta profile
+softscope bench/run.js --compare baseline.json --ai
+
+# Offline comparison of two existing profiles in CI
+softscope compare baseline.json current.json --md
+
+# CI gating: exit code 1 if any function regresses by > 10%
+softscope bench/run.js --compare baseline.json --fail-on-regression 10
+```
+
 ### Run NPM Scripts or Framework Runners
 ```bash
 # Profile an npm test or vitest suite
@@ -57,6 +78,10 @@ softscope --live demo/server.js
 
 | Flag | Purpose | Example |
 | :--- | :--- | :--- |
+| `--save-baseline <file>` | Saves execution profile as baseline JSON for future comparisons | `softscope bench.js --save-baseline base.json` |
+| `--compare <file>`, `--baseline` | Compares current run against baseline JSON profile | `softscope bench.js --compare base.json` |
+| `--fail-on-regression <n>` | Exits with code 1 if any function regresses by > n% (default: 10) | `softscope bench.js --compare base.json --fail-on-regression 15` |
+| `compare <base> <curr>` | Standalone command to compare two saved JSON profiles offline | `softscope compare base.json curr.json --md` |
 | `--ai`, `--llm` | Outputs token-efficient AI diagnostic profile with directives | `softscope app.js --ai` |
 | `--tui` | Launches zero-dependency interactive Terminal User Interface | `softscope bench/run.js --tui` |
 | `--md`, `--markdown` | Outputs report in GitHub Flavored Markdown to stdout | `softscope app.js --md` |
