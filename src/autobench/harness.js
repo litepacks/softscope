@@ -54,6 +54,17 @@ function unmute() {
   process.exit = origExit;
 }
 
+function callOrConstruct(fn, args) {
+  try {
+    return fn(...args);
+  } catch (err) {
+    if (err instanceof TypeError && err.message && err.message.includes("cannot be invoked without 'new'")) {
+      return new fn(...args);
+    }
+    throw err;
+  }
+}
+
 async function run() {
   let targetMod;
   try {
@@ -95,7 +106,7 @@ async function run() {
     // 1. Warmup
     try {
       for (let i = 0; i < 50; i++) {
-        const p = fn(...baselineSeed);
+        const p = callOrConstruct(fn, baselineSeed);
         if (isAsync && p && typeof p.then === 'function') {
           await p;
         }
@@ -119,12 +130,13 @@ async function run() {
       if (isAsync) {
         const asyncIters = Math.min(targetIterations, 500);
         for (let i = 0; i < asyncIters; i++) {
-          await fn(...baselineSeed);
+          const p = callOrConstruct(fn, baselineSeed);
+          if (p && typeof p.then === 'function') await p;
           iters++;
         }
       } else {
         for (let i = 0; i < targetIterations; i++) {
-          fn(...baselineSeed);
+          callOrConstruct(fn, baselineSeed);
           iters++;
         }
       }
@@ -143,7 +155,7 @@ async function run() {
     for (let s = 0; s < sampleCount; s++) {
       try {
         const s0 = performance.now();
-        const p = fn(...baselineSeed);
+        const p = callOrConstruct(fn, baselineSeed);
         if (isAsync && p && typeof p.then === 'function') await p;
         const d = performance.now() - s0;
         if (d < minMs) minMs = d;
@@ -161,7 +173,7 @@ async function run() {
     for (const fuzzCase of tc.fuzzSeeds || []) {
       try {
         const f0 = performance.now();
-        const p = fn(...fuzzCase.args);
+        const p = callOrConstruct(fn, fuzzCase.args);
         if (p && typeof p.then === 'function') await p;
         const fDuration = performance.now() - f0;
 
@@ -213,6 +225,28 @@ run().catch((err) => {
   process.exit(1);
 });
 `;
+}
+
+function findTsRunner(targetFile, projectRoot) {
+  let currentDir = path.dirname(targetFile);
+  const root = path.parse(currentDir).root;
+  while (currentDir && currentDir !== root) {
+    const candidate = path.join(currentDir, 'node_modules', '.bin', 'tsx');
+    if (fs.existsSync(candidate)) {
+      return { executable: candidate, args: [] };
+    }
+    currentDir = path.dirname(currentDir);
+  }
+
+  const rootCandidate = path.join(projectRoot || process.cwd(), 'node_modules', '.bin', 'tsx');
+  if (fs.existsSync(rootCandidate)) {
+    return { executable: rootCandidate, args: [] };
+  }
+
+  return {
+    executable: process.execPath,
+    args: []
+  };
 }
 
 /**
@@ -277,7 +311,8 @@ export async function runAutoBench(options) {
   let exitCode = 0;
 
   try {
-    const child = spawn(process.execPath, [tmpRunnerPath], {
+    const runner = findTsRunner(targetFile, options.projectRoot || process.cwd());
+    const child = spawn(runner.executable, [...runner.args, tmpRunnerPath], {
       cwd: options.projectRoot || process.cwd(),
       env: { ...process.env },
       stdio: ['ignore', 'ignore', 'pipe']

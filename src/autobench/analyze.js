@@ -67,55 +67,148 @@ function resolveTsType(typeNode) {
 }
 
 /**
- * Analyzes a JavaScript/TypeScript module and discovers candidate functions for auto-benchmarking.
+ * Resolves a module specifier to an existing file path on disk.
+ * Handles TypeScript extension mapping (.js -> .ts/.tsx) and barrel directory indexes.
  */
-export function analyzeModule(filePath, options = {}) {
-  const resolved = path.resolve(process.cwd(), filePath);
-  if (!fs.existsSync(resolved)) {
-    throw new Error(`Target file not found: ${resolved}`);
+export function resolveModuleFile(baseDir, specifier) {
+  if (!specifier || !specifier.startsWith('.')) {
+    return null;
   }
 
-  const code = fs.readFileSync(resolved, 'utf-8');
-  const { ast, errors } = parseSource(resolved, code);
+  const directPath = path.resolve(baseDir, specifier);
 
-  if (!ast || (errors && errors.length > 0)) {
-    throw new Error(`Failed to parse ${resolved}: ${errors ? errors[0]?.message : 'Unknown AST error'}`);
+  // 1. Exact file match
+  if (fs.existsSync(directPath) && fs.statSync(directPath).isFile()) {
+    return directPath;
+  }
+
+  // 2. Map .js / .mjs / .cjs to TypeScript source equivalents (.ts / .tsx / .mts / .cts)
+  const ext = path.extname(specifier);
+  if (ext === '.js' || ext === '.mjs' || ext === '.cjs') {
+    const withoutExt = directPath.slice(0, -ext.length);
+    for (const tsExt of ['.ts', '.tsx', '.mts', '.cts']) {
+      const candidate = withoutExt + tsExt;
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        return candidate;
+      }
+    }
+  }
+
+  // 3. Try appending extensions if none provided
+  for (const candidateExt of ['.ts', '.tsx', '.js', '.mjs', '.jsx']) {
+    const candidate = directPath + candidateExt;
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+      return candidate;
+    }
+  }
+
+  // 4. Directory index resolution (e.g. ./io -> ./io/index.ts)
+  if (fs.existsSync(directPath) && fs.statSync(directPath).isDirectory()) {
+    for (const indexName of ['index.ts', 'index.tsx', 'index.js', 'index.mjs']) {
+      const candidate = path.join(directPath, indexName);
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        return candidate;
+      }
+    }
+  }
+
+  return null;
+}
+
+function analyzeModuleInternal(resolved, options = {}, visited = new Set()) {
+  if (visited.has(resolved) || !fs.existsSync(resolved)) {
+    return [];
+  }
+  visited.add(resolved);
+
+  let code;
+  try {
+    code = fs.readFileSync(resolved, 'utf-8');
+  } catch {
+    return [];
+  }
+
+  let ast;
+  try {
+    const parsed = parseSource(resolved, code);
+    ast = parsed.ast;
+  } catch {
+    return [];
+  }
+
+  if (!ast || !ast.body) {
+    return [];
   }
 
   const exportMap = new Map(); // localName -> exportName
   let defaultExportName = null;
   const topLevelFunctions = new Map(); // name -> FunctionInfo
+  const reExportedFunctions = []; // functions brought in via export ... from '...'
 
+  const fileDir = path.dirname(resolved);
   const body = ast.body || [];
 
   for (const node of body) {
     // 1. ExportNamedDeclaration
     if (node.type === 'ExportNamedDeclaration') {
       if (node.declaration) {
-        if (node.declaration.type === 'FunctionDeclaration' && node.declaration.id) {
-          const fnName = node.declaration.id.name;
+        const decl = node.declaration;
+        if (decl.type === 'FunctionDeclaration' && decl.id) {
+          const fnName = decl.id.name;
           exportMap.set(fnName, fnName);
           topLevelFunctions.set(fnName, {
-            node: node.declaration,
+            node: decl,
             name: fnName,
-            exportName: fnName
+            exportName: fnName,
+            isClass: false
           });
-        } else if (node.declaration.type === 'VariableDeclaration') {
-          for (const decl of node.declaration.declarations || []) {
-            if (decl.id && decl.id.name && decl.init) {
-              if (decl.init.type === 'FunctionExpression' || decl.init.type === 'ArrowFunctionExpression') {
-                const fnName = decl.id.name;
+        } else if (decl.type === 'ClassDeclaration' && decl.id) {
+          const clsName = decl.id.name;
+          exportMap.set(clsName, clsName);
+          const ctor = (decl.body?.body || []).find(m => m.type === 'MethodDefinition' && m.kind === 'constructor');
+          topLevelFunctions.set(clsName, {
+            node: ctor ? ctor.value : decl,
+            name: clsName,
+            exportName: clsName,
+            isClass: true
+          });
+        } else if (decl.type === 'VariableDeclaration') {
+          for (const d of decl.declarations || []) {
+            if (d.id && d.id.name && d.init) {
+              if (d.init.type === 'FunctionExpression' || d.init.type === 'ArrowFunctionExpression') {
+                const fnName = d.id.name;
                 exportMap.set(fnName, fnName);
                 topLevelFunctions.set(fnName, {
-                  node: decl.init,
+                  node: d.init,
                   name: fnName,
-                  exportName: fnName
+                  exportName: fnName,
+                  isClass: false
+                });
+              }
+            }
+          }
+        }
+      } else if (node.source && node.source.value) {
+        // Re-export: export { a, b as c } from './foo.js'
+        const subFile = resolveModuleFile(fileDir, node.source.value);
+        if (subFile) {
+          const subFns = analyzeModuleInternal(subFile, options, visited);
+          for (const spec of node.specifiers || []) {
+            if (spec.type === 'ExportSpecifier' && spec.local && spec.exported) {
+              const localName = spec.local.name;
+              const exportName = spec.exported.name;
+              const match = subFns.find(f => f.exportName === localName || f.name === localName);
+              if (match) {
+                reExportedFunctions.push({
+                  ...match,
+                  exportName
                 });
               }
             }
           }
         }
       } else if (node.specifiers) {
+        // Local export: export { foo, bar as baz }
         for (const spec of node.specifiers) {
           if (spec.local && spec.exported) {
             exportMap.set(spec.local.name, spec.exported.name);
@@ -124,40 +217,78 @@ export function analyzeModule(filePath, options = {}) {
       }
     }
 
-    // 2. ExportDefaultDeclaration
-    else if (node.type === 'ExportDefaultDeclaration') {
-      if (node.declaration) {
-        if (
-          node.declaration.type === 'FunctionDeclaration' ||
-          node.declaration.type === 'FunctionExpression' ||
-          node.declaration.type === 'ArrowFunctionExpression'
-        ) {
-          const fnName = (node.declaration.id && node.declaration.id.name) ? node.declaration.id.name : 'default';
-          defaultExportName = 'default';
-          topLevelFunctions.set(fnName, {
-            node: node.declaration,
-            name: fnName,
-            exportName: 'default'
-          });
-        } else if (node.declaration.type === 'Identifier') {
-          defaultExportName = node.declaration.name;
+    // 2. ExportAllDeclaration: export * from './foo.js'
+    else if (node.type === 'ExportAllDeclaration' && node.source && node.source.value) {
+      const subFile = resolveModuleFile(fileDir, node.source.value);
+      if (subFile) {
+        const subFns = analyzeModuleInternal(subFile, options, visited);
+        for (const f of subFns) {
+          reExportedFunctions.push({ ...f });
         }
       }
     }
 
-    // 3. Top-level function declarations
+    // 3. ExportDefaultDeclaration
+    else if (node.type === 'ExportDefaultDeclaration') {
+      if (node.declaration) {
+        const decl = node.declaration;
+        if (
+          decl.type === 'FunctionDeclaration' ||
+          decl.type === 'FunctionExpression' ||
+          decl.type === 'ArrowFunctionExpression'
+        ) {
+          const fnName = (decl.id && decl.id.name) ? decl.id.name : 'default';
+          defaultExportName = 'default';
+          topLevelFunctions.set(fnName, {
+            node: decl,
+            name: fnName,
+            exportName: 'default',
+            isClass: false
+          });
+        } else if (decl.type === 'ClassDeclaration') {
+          const clsName = (decl.id && decl.id.name) ? decl.id.name : 'default';
+          defaultExportName = 'default';
+          const ctor = (decl.body?.body || []).find(m => m.type === 'MethodDefinition' && m.kind === 'constructor');
+          topLevelFunctions.set(clsName, {
+            node: ctor ? ctor.value : decl,
+            name: clsName,
+            exportName: 'default',
+            isClass: true
+          });
+        } else if (decl.type === 'Identifier') {
+          defaultExportName = decl.name;
+        }
+      }
+    }
+
+    // 4. Top-level function declarations
     else if (node.type === 'FunctionDeclaration' && node.id) {
       const fnName = node.id.name;
       if (!topLevelFunctions.has(fnName)) {
         topLevelFunctions.set(fnName, {
           node,
           name: fnName,
-          exportName: exportMap.get(fnName) || null
+          exportName: exportMap.get(fnName) || null,
+          isClass: false
         });
       }
     }
 
-    // 4. Top-level const fn = ...
+    // 5. Top-level class declarations
+    else if (node.type === 'ClassDeclaration' && node.id) {
+      const clsName = node.id.name;
+      if (!topLevelFunctions.has(clsName)) {
+        const ctor = (node.body?.body || []).find(m => m.type === 'MethodDefinition' && m.kind === 'constructor');
+        topLevelFunctions.set(clsName, {
+          node: ctor ? ctor.value : node,
+          name: clsName,
+          exportName: exportMap.get(clsName) || null,
+          isClass: true
+        });
+      }
+    }
+
+    // 6. Top-level const fn = ...
     else if (node.type === 'VariableDeclaration') {
       for (const decl of node.declarations || []) {
         if (decl.id && decl.id.name && decl.init) {
@@ -167,7 +298,8 @@ export function analyzeModule(filePath, options = {}) {
               topLevelFunctions.set(fnName, {
                 node: decl.init,
                 name: fnName,
-                exportName: exportMap.get(fnName) || null
+                exportName: exportMap.get(fnName) || null,
+                isClass: false
               });
             }
           }
@@ -175,7 +307,7 @@ export function analyzeModule(filePath, options = {}) {
       }
     }
 
-    // 5. CommonJS exports: module.exports = ... or exports.foo = ...
+    // 7. CommonJS exports: module.exports = ... or exports.foo = ...
     else if (node.type === 'ExpressionStatement' && node.expression) {
       const expr = node.expression;
       if (expr.type === 'AssignmentExpression') {
@@ -187,7 +319,8 @@ export function analyzeModule(filePath, options = {}) {
               topLevelFunctions.set(prop, {
                 node: expr.right,
                 name: prop,
-                exportName: prop
+                exportName: prop,
+                isClass: false
               });
             }
           } else if (
@@ -200,7 +333,8 @@ export function analyzeModule(filePath, options = {}) {
               topLevelFunctions.set('default', {
                 node: expr.right,
                 name: 'default',
-                exportName: 'default'
+                exportName: 'default',
+                isClass: false
               });
             }
           }
@@ -209,14 +343,22 @@ export function analyzeModule(filePath, options = {}) {
     }
   }
 
-  // If default export referenced an existing function
+  // Update exportNames for items exported via export { local as exported }
+  for (const [localName, exportName] of exportMap.entries()) {
+    if (topLevelFunctions.has(localName)) {
+      topLevelFunctions.get(localName).exportName = exportName;
+    }
+  }
+
+  // If default export referenced an existing function/class
   if (defaultExportName && topLevelFunctions.has(defaultExportName)) {
     const entry = topLevelFunctions.get(defaultExportName);
     entry.exportName = 'default';
   }
 
-  // Filter candidates: if options.all is true, take all top-level functions;
-  // otherwise, only take exported functions. If none are explicitly exported, take all top-level functions.
+  const result = [];
+
+  // Filter candidates: if options.all is true, take all functions; otherwise only exported
   let candidates = Array.from(topLevelFunctions.values());
   const exportedOnly = candidates.filter(c => Boolean(c.exportName));
 
@@ -224,7 +366,6 @@ export function analyzeModule(filePath, options = {}) {
     candidates = exportedOnly;
   }
 
-  const result = [];
   for (const item of candidates) {
     const fnNode = item.node;
     if (fnNode.generator) continue; // Skip generators
@@ -235,13 +376,37 @@ export function analyzeModule(filePath, options = {}) {
       name: item.name,
       exportName: item.exportName || item.name,
       async: Boolean(fnNode.async),
+      isClass: Boolean(item.isClass),
       params,
       line: fnNode.loc ? fnNode.loc.start.line : 1
     });
   }
 
+  // Merge re-exported functions (avoid duplicate exportNames)
+  const existingExports = new Set(result.map(r => r.exportName));
+  for (const reExport of reExportedFunctions) {
+    if (!existingExports.has(reExport.exportName)) {
+      existingExports.add(reExport.exportName);
+      result.push(reExport);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Analyzes a JavaScript/TypeScript module and discovers candidate functions for auto-benchmarking.
+ */
+export function analyzeModule(filePath, options = {}) {
+  const resolved = path.resolve(process.cwd(), filePath);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`Target file not found: ${resolved}`);
+  }
+
+  const functions = analyzeModuleInternal(resolved, options, new Set());
+
   return {
     filePath: resolved,
-    functions: result
+    functions
   };
 }

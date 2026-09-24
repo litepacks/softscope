@@ -157,3 +157,43 @@ test('CLI: --capture-seeds records real runtime arguments for replay', async () 
     }
   }
 });
+
+test('Auto-Bench AST: discovers re-exports, barrel files, and class constructors', () => {
+  const tmpDir = path.join(os.tmpdir(), `softscope-barrel-test-${Date.now()}`);
+  fs.mkdirSync(tmpDir, { recursive: true });
+
+  try {
+    const subPath = path.join(tmpDir, 'sub.js');
+    fs.writeFileSync(subPath, `
+      export function subFn(x = 10) { return x * 2; }
+      export class SubClass { constructor(name = "test") { this.name = name; } }
+    `, 'utf-8');
+
+    const barrelPath = path.join(tmpDir, 'index.js');
+    fs.writeFileSync(barrelPath, `
+      export { subFn as aliasedFn, SubClass } from './sub.js';
+      export function localFn() { return 1; }
+    `, 'utf-8');
+
+    const analysis = analyzeModule(barrelPath);
+    assert.equal(analysis.functions.length, 3);
+
+    const aliased = analysis.functions.find(f => f.exportName === 'aliasedFn');
+    assert.ok(aliased, 'Should discover re-exported function with alias');
+    assert.equal(aliased.params[0].defaultValue, 10);
+
+    const cls = analysis.functions.find(f => f.exportName === 'SubClass');
+    assert.ok(cls, 'Should discover re-exported class');
+    assert.equal(cls.isClass, true);
+    assert.equal(cls.params[0].defaultValue, 'test');
+
+    const local = analysis.functions.find(f => f.exportName === 'localFn');
+    assert.ok(local, 'Should discover local function');
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // Ignore
+    }
+  }
+});
