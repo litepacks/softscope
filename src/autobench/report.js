@@ -109,6 +109,29 @@ export function renderAutoBenchTerminalReport(results, options = {}) {
     lines.push('');
   }
 
+  // 4. Call Relationships (Internal Invocations)
+  if (results.callEdges && results.callEdges.length > 0) {
+    const topEdges = [...results.callEdges]
+      .sort((a, b) => b.calls - a.calls)
+      .slice(0, Math.max(10, options.top || 10));
+
+    lines.push(`${BOLD}Call Relationships (Internal Invocations)${RESET}`);
+    const edgeColumns = [
+      { key: 'caller', label: 'Caller', align: 'left', minWidth: 20, maxWidth: 36 },
+      { key: 'callee', label: 'Callee', align: 'left', minWidth: 20, maxWidth: 36 },
+      { key: 'calls', label: 'Calls', align: 'right', minWidth: 10 }
+    ];
+
+    const edgeRows = topEdges.map(e => ({
+      caller: e.callerName,
+      callee: e.calleeName,
+      calls: 'x' + formatNumber(e.calls)
+    }));
+
+    lines.push(renderTable({ columns: edgeColumns, rows: edgeRows }));
+    lines.push('');
+  }
+
   return lines.join('\n');
 }
 
@@ -140,6 +163,21 @@ export function renderAutoBenchMarkdownReport(results, options = {}) {
           : '🟢 Stable';
 
       lines.push(`| \`${fn.name}\` | **${formatNumber(fn.opsPerSec)} /s** | ${formatDuration(fn.avgMs)} | ${formatDuration(fn.minMs)} | ${formatDuration(fn.maxMs)} | ${robustness} |`);
+    }
+    lines.push('');
+  }
+
+  if (results.callEdges && results.callEdges.length > 0) {
+    const topEdges = [...results.callEdges]
+      .sort((a, b) => b.calls - a.calls)
+      .slice(0, Math.max(10, options.top || 10));
+
+    lines.push('## Call Relationships (Internal Invocations)');
+    lines.push('');
+    lines.push('| Caller | Callee | Calls |');
+    lines.push('| :--- | :--- | :---: |');
+    for (const e of topEdges) {
+      lines.push(`| \`${e.callerName}\` | \`${e.calleeName}\` | x${formatNumber(e.calls)} |`);
     }
     lines.push('');
   }
@@ -198,6 +236,14 @@ export function renderAutoBenchAiReport(results, options = {}) {
   }
   lines.push('');
 
+  if (results.callEdges && results.callEdges.length > 0) {
+    lines.push('## INTERNAL CALL RELATIONSHIPS');
+    for (const e of results.callEdges) {
+      lines.push(`- \`${e.callerName}\` -> \`${e.calleeName}\` (x${formatNumber(e.calls)})`);
+    }
+    lines.push('');
+  }
+
   if (results.totalCrashes > 0) {
     lines.push('## CRITICAL BUGS (UNHANDLED CRASHES)');
     for (const fn of results.functions) {
@@ -242,6 +288,7 @@ export function renderAutoBenchJsonReport(results) {
     iterations: results.iterations,
     totalCrashes: results.totalCrashes,
     totalCliffs: results.totalCliffs,
-    functions: results.functions
+    functions: results.functions,
+    callEdges: results.callEdges || []
   }, null, 2);
 }

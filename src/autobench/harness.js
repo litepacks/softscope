@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+import picomatch from 'picomatch';
 import { analyzeModule } from './analyze.js';
 import { loadSeedsFile, synthesizeSeeds } from './seeds.js';
 import {
@@ -11,6 +12,8 @@ import {
   renderAutoBenchAiReport,
   renderAutoBenchJsonReport
 } from './report.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Generates temporary benchmark runner code to execute candidate functions safely.
@@ -73,6 +76,11 @@ async function run() {
     unmute();
     origError('[softscope-autobench-import-error]', importErr);
     process.exit(1);
+  }
+
+  // Reset collector to ignore top-level module evaluation side-effects
+  if (globalThis.__softscope && globalThis.__softscope._collector) {
+    globalThis.__softscope._collector.reset();
   }
 
   const testCases = ${JSON.stringify(testCases)};
@@ -215,8 +223,18 @@ async function run() {
     });
   }
 
+  let callEdges = [];
+  if (globalThis.__softscope && globalThis.__softscope._collector) {
+    const snap = globalThis.__softscope._collector.getSnapshot();
+    callEdges = snap.edges || [];
+  }
+
   unmute();
-  fs.writeFileSync(${JSON.stringify(resultsPath)}, JSON.stringify(results), 'utf-8');
+  const payload = {
+    functions: results,
+    callEdges
+  };
+  fs.writeFileSync(${JSON.stringify(resultsPath)}, JSON.stringify(payload), 'utf-8');
 }
 
 run().catch((err) => {
@@ -225,6 +243,18 @@ run().catch((err) => {
   process.exit(1);
 });
 `;
+}
+
+function findProjectRoot(targetFile, fallbackRoot) {
+  let currentDir = path.dirname(path.resolve(targetFile));
+  const root = path.parse(currentDir).root;
+  while (currentDir && currentDir !== root) {
+    if (fs.existsSync(path.join(currentDir, 'package.json'))) {
+      return currentDir;
+    }
+    currentDir = path.dirname(currentDir);
+  }
+  return fallbackRoot || process.cwd();
 }
 
 function findTsRunner(targetFile, projectRoot) {
@@ -271,6 +301,29 @@ export async function runAutoBench(options) {
     return 1;
   }
 
+  // Apply function filter if provided (--filter, --fn, --match)
+  if (options.filter) {
+    const pattern = options.filter.trim();
+    const isGlob = pattern.includes('*') || pattern.includes('?') || pattern.includes('[');
+    const matcher = isGlob ? picomatch(pattern, { nocase: true }) : null;
+
+    analysis.functions = analysis.functions.filter(fn => {
+      if (matcher) {
+        return matcher(fn.name) || matcher(fn.exportName);
+      }
+      const lowerP = pattern.toLowerCase();
+      return (
+        fn.name.toLowerCase().includes(lowerP) ||
+        fn.exportName.toLowerCase().includes(lowerP)
+      );
+    });
+
+    if (analysis.functions.length === 0) {
+      console.warn(`[softscope] No functions matched filter "${options.filter}".`);
+      return 0;
+    }
+  }
+
   if (analysis.functions.length === 0) {
     console.warn(`[softscope] No callable exported functions discovered in ${path.relative(process.cwd(), targetFile)}.`);
     return 0;
@@ -310,11 +363,35 @@ export async function runAutoBench(options) {
 
   let exitCode = 0;
 
+  const targetProjectRoot = findProjectRoot(targetFile, options.projectRoot);
+  const registerPath = path.resolve(__dirname, '..', 'loader', 'register.js');
+  const registerUrl = pathToFileURL(registerPath).href;
+
+  const existingNodeOptions = process.env.NODE_OPTIONS || '';
+  const alreadyImported = existingNodeOptions.includes('register.js') || existingNodeOptions.includes(registerUrl);
+  const nodeOptions = alreadyImported
+    ? existingNodeOptions
+    : existingNodeOptions
+      ? `${existingNodeOptions} --import=${registerUrl}`
+      : `--import=${registerUrl}`;
+
+  const childEnv = {
+    ...process.env,
+    NODE_OPTIONS: nodeOptions,
+    SOFTSCOPE_CONFIG: JSON.stringify({
+      ...options,
+      projectRoot: targetProjectRoot,
+      include: options.include || [],
+      exclude: options.exclude || [],
+      includeNodeModules: Boolean(options.includeNodeModules)
+    })
+  };
+
   try {
-    const runner = findTsRunner(targetFile, options.projectRoot || process.cwd());
+    const runner = findTsRunner(targetFile, targetProjectRoot);
     const child = spawn(runner.executable, [...runner.args, tmpRunnerPath], {
-      cwd: options.projectRoot || process.cwd(),
-      env: { ...process.env },
+      cwd: targetProjectRoot,
+      env: childEnv,
       stdio: ['ignore', 'ignore', 'pipe']
     });
 
@@ -349,13 +426,13 @@ export async function runAutoBench(options) {
     return exitCode;
   }
 
-  let fnResults = [];
+  let parsedPayload = {};
   try {
     if (!fs.existsSync(tmpResultsPath)) {
       throw new Error('Results file was not created by the benchmark runner');
     }
     const rawData = fs.readFileSync(tmpResultsPath, 'utf-8');
-    fnResults = JSON.parse(rawData);
+    parsedPayload = JSON.parse(rawData);
   } catch (err) {
     console.error(`[softscope] Failed to parse benchmark results: ${err.message}`);
     return 1;
@@ -365,10 +442,14 @@ export async function runAutoBench(options) {
     } catch {}
   }
 
+  const fnResults = Array.isArray(parsedPayload) ? parsedPayload : (parsedPayload.functions || []);
+  const callEdges = parsedPayload.callEdges || [];
+
   const results = {
     targetFile: path.relative(process.cwd(), targetFile),
     iterations,
     functions: fnResults,
+    callEdges,
     totalCrashes: fnResults.reduce((acc, f) => acc + (f.crashes ? f.crashes.length : 0), 0),
     totalCliffs: fnResults.reduce((acc, f) => acc + (f.cliffs ? f.cliffs.length : 0), 0)
   };

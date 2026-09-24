@@ -197,3 +197,40 @@ test('Auto-Bench AST: discovers re-exports, barrel files, and class constructors
     }
   }
 });
+
+test('Auto-Bench Config: parses --filter, --fn, and --match flags correctly', () => {
+  const opt1 = parseCliArgs(['auto-bench', 'src/math.js', '--filter', 'compute']);
+  assert.equal(opt1.filter, 'compute');
+
+  const opt2 = parseCliArgs(['auto-bench', 'src/math.js', '--fn', 'add*']);
+  assert.equal(opt2.filter, 'add*');
+
+  const opt3 = parseCliArgs(['auto-bench', 'src/math.js', '--match', 'parse']);
+  assert.equal(opt3.filter, 'parse');
+});
+
+test('CLI: auto-bench filters functions and extracts call graph relationships', async () => {
+  const fixturePath = path.join(FIXTURES_DIR, 'simple', 'index.js');
+  
+  // JSON output test
+  const { stdout: jsonOut } = await runCli(['auto-bench', fixturePath, '--filter', 'compute', '--json']);
+  const parsed = JSON.parse(jsonOut);
+  
+  assert.equal(parsed.functions.length, 1);
+  assert.equal(parsed.functions[0].name, 'compute');
+  assert.ok(parsed.callEdges.length >= 2);
+
+  const edgeAdd = parsed.callEdges.find(e => e.callerName === 'compute' && e.calleeName === 'add');
+  const edgeMultiply = parsed.callEdges.find(e => e.callerName === 'compute' && e.calleeName === 'multiply');
+  assert.ok(edgeAdd, 'Should capture caller-callee edge: compute -> add');
+  assert.ok(edgeMultiply, 'Should capture caller-callee edge: compute -> multiply');
+  assert.ok(edgeAdd.calls > 0);
+
+  // Markdown output test
+  const { stdout: mdOut } = await runCli(['auto-bench', fixturePath, '--filter', 'compute', '--md']);
+  assert.ok(mdOut.includes('## Call Relationships (Internal Invocations)'));
+  assert.ok(mdOut.includes('`compute`'));
+  assert.ok(mdOut.includes('`add`'));
+  assert.ok(mdOut.includes('`multiply`'));
+});
+

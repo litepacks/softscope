@@ -46,7 +46,8 @@ export function createFilter(options = {}) {
       normalized.startsWith(SOFTSCOPE_SRC + path.sep) ||
       normalized === SOFTSCOPE_BIN ||
       normalized.startsWith(SOFTSCOPE_BIN + path.sep) ||
-      normalized.includes(path.sep + 'node_modules' + path.sep + 'softscope' + path.sep)
+      normalized.includes(path.sep + 'node_modules' + path.sep + 'softscope' + path.sep) ||
+      normalized.includes('softscope-autobench-runner')
     ) {
       return false;
     }

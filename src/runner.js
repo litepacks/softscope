@@ -498,6 +498,7 @@ Examples:
   softscope app.js
   softscope bench/run.js
   softscope auto-bench src/math.js
+  softscope auto-bench src/math.js --filter compute
   softscope auto-bench src/math.js --md
   softscope npm test --capture-seeds
   softscope auto-bench src/math.js --seeds seeds.json
@@ -509,6 +510,7 @@ Examples:
   softscope -o report.md app.js
 
 Options:
+  --filter <pattern>       Filter functions to benchmark by name or glob (aliases: --fn, --match)
   --capture-seeds [file]   Record real function argument samples to seeds JSON file
   --seeds <file>           Use captured seeds for auto-benchmarking
   --fuzz                   Enable boundary/edge-case fuzzing during auto-bench (default: true)

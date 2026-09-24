@@ -33,6 +33,7 @@ export function parseCliArgs(rawArgs, cwd = process.cwd()) {
     fuzz: true,
     iterations: 10000,
     all: false,
+    filter: null,
     help: false,
     version: false,
     projectRoot: path.resolve(cwd),
@@ -167,6 +168,18 @@ export function parseCliArgs(rawArgs, cwd = process.cwd()) {
       i++;
     } else if (arg === '--all') {
       options.all = true;
+      i++;
+    } else if (arg === '--filter' || arg === '--fn' || arg === '--match') {
+      options.filter = rawArgs[i + 1] || null;
+      i += 2;
+    } else if (arg.startsWith('--filter=')) {
+      options.filter = arg.slice('--filter='.length);
+      i++;
+    } else if (arg.startsWith('--fn=')) {
+      options.filter = arg.slice('--fn='.length);
+      i++;
+    } else if (arg.startsWith('--match=')) {
+      options.filter = arg.slice('--match='.length);
       i++;
     } else {
       command.push(arg);

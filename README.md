@@ -314,6 +314,10 @@ Benchmark JavaScript/TypeScript functions **without writing benchmark boilerplat
 # Auto-discover exports and benchmark with boundary edge-case fuzzing
 softscope auto-bench src/math.js
 
+# Benchmark specific functions by name or glob pattern
+softscope auto-bench src/math.js --filter compute
+softscope auto-bench packages/core/src/index.ts --filter "tokenize*"
+
 # Benchmark all functions (including non-exported internals)
 softscope auto-bench src/parser.js --all
 
@@ -421,6 +425,7 @@ __softscope.toggleOverlay();
 | Flag | Description |
 |------|-------------|
 | `auto-bench <file>` | Autonomous micro-benchmarking with AST analysis and edge-case fuzzing |
+| `--filter <pattern>`, `--fn`, `--match` | Filter functions to benchmark by name or glob pattern (e.g. `--filter "parse*"`) |
 | `--capture-seeds [file]` | Record real function argument samples during test execution |
 | `--seeds <file>` | Load captured seeds for auto-benchmarking |
 | `--fuzz`, `--no-fuzz` | Enable or disable boundary/edge-case fuzzing during auto-bench |
