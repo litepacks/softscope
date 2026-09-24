@@ -1,6 +1,6 @@
 {
   "name": "softscope",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Lightweight Node.js CLI profiler for benchmarks and performance suites: function execution frequency, self/total duration, call graphs, and runtime reach",
   "type": "module",
   "bin": {
@@ -43,7 +43,11 @@
     "oxc",
     "metrics",
     "runtime",
-    "reach"
+    "reach",
+    "benchmark",
+    "autobench",
+    "fuzzing",
+    "regression"
   ],
   "engines": {
     "node": ">=20.6.0"

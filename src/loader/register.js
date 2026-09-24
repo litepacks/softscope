@@ -10,11 +10,23 @@ import { transformSource } from '../instrument/transform.js';
 
 // 1. Initialize global collector in the current process
 if (!globalThis.__softscope) {
+  let initialConfig = {};
+  try {
+    if (process.env.SOFTSCOPE_CONFIG) {
+      initialConfig = JSON.parse(process.env.SOFTSCOPE_CONFIG);
+    }
+  } catch {
+    initialConfig = {};
+  }
+
   const collector = new RuntimeCollector();
+  if (initialConfig.captureSeeds) {
+    collector.captureSeeds = true;
+  }
   setupSession(collector);
 
   globalThis.__softscope = {
-    enter: (id) => collector.enter(id),
+    enter: (id, args) => collector.enter(id, args),
     exit: (id, isError) => collector.exit(id, isError),
     registerFile: (file, fns) => collector.registerFile(file, fns),
     _collector: collector
@@ -67,7 +79,8 @@ function hookCjsExtension(ext) {
 
       const relPath = path.relative(projectRoot, filename);
       const transformed = transformSource(source, filename, relPath, cjsRegistry, {
-        strict: Boolean(config.strict)
+        strict: Boolean(config.strict),
+        captureSeeds: Boolean(config.captureSeeds)
       });
 
       module._compile(transformed.code, filename);

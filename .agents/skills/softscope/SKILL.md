@@ -57,6 +57,25 @@ softscope compare baseline.json current.json --md
 softscope bench/run.js --compare baseline.json --fail-on-regression 10
 ```
 
+### Run Autonomous Micro-Benchmarking & Edge-Case Fuzzing
+```bash
+# Automatically benchmark all exported functions with fuzzing
+softscope auto-bench src/math.js
+
+# Benchmark with Markdown output (ideal for PR comments)
+softscope auto-bench src/math.js --md
+
+# Benchmark with AI diagnostic profile and directives
+softscope auto-bench src/math.js --ai
+
+# Capture real runtime argument seeds during tests, then replay in auto-bench
+softscope npm test --capture-seeds
+softscope auto-bench src/math.js --seeds seeds.json
+
+# Benchmark with custom iterations and benchmark all functions
+softscope auto-bench src/math.js --iterations 50000 --all
+```
+
 ### Run NPM Scripts or Framework Runners
 ```bash
 # Profile an npm test or vitest suite
@@ -78,6 +97,12 @@ softscope --live demo/server.js
 
 | Flag | Purpose | Example |
 | :--- | :--- | :--- |
+| `auto-bench <file>` | Autonomous micro-benchmarking with AST analysis and edge-case fuzzing | `softscope auto-bench src/math.js` |
+| `--capture-seeds [file]` | Records real function argument samples during test execution | `softscope npm test --capture-seeds` |
+| `--seeds <file>` | Loads captured seeds for auto-benchmarking | `softscope auto-bench src/math.js --seeds seeds.json` |
+| `--fuzz`, `--no-fuzz` | Enables or disables boundary/edge-case fuzzing during auto-bench | `softscope auto-bench src/math.js --no-fuzz` |
+| `--iterations <n>` | Number of iterations per function in auto-bench (default: 10000) | `softscope auto-bench src/math.js --iterations 50000` |
+| `--all` | Benchmarks all top-level functions (including unexported ones) | `softscope auto-bench src/math.js --all` |
 | `--save-baseline <file>` | Saves execution profile as baseline JSON for future comparisons | `softscope bench.js --save-baseline base.json` |
 | `--compare <file>`, `--baseline` | Compares current run against baseline JSON profile | `softscope bench.js --compare base.json` |
 | `--fail-on-regression <n>` | Exits with code 1 if any function regresses by > n% (default: 10) | `softscope bench.js --compare base.json --fail-on-regression 15` |

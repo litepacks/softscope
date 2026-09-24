@@ -19,6 +19,8 @@ export class RuntimeCollector {
     this.files = new Map(); // filePath -> fileStats
     this.metadata = new Map(); // id -> FunctionMetadata
     this.startTime = Date.now();
+    this.captureSeeds = false;
+    this.seeds = new Map(); // id -> Array of serialized argument arrays
   }
 
   _ensureCapacity(id) {
@@ -87,13 +89,28 @@ export class RuntimeCollector {
     }
   }
 
-  enter(id) {
+  enter(id, args) {
     this._ensureCapacity(id);
     const now = performance.now();
 
     this.inFlight[id]++;
     if (this.inFlight[id] > this.maxConcurrent[id]) {
       this.maxConcurrent[id] = this.inFlight[id];
+    }
+
+    if (this.captureSeeds && args) {
+      let list = this.seeds.get(id);
+      if (!list) {
+        list = [];
+        this.seeds.set(id, list);
+      }
+      if (list.length < 5) {
+        const serialized = safeSerializeArgs(args);
+        const jsonKey = JSON.stringify(serialized);
+        if (!list.some(existing => JSON.stringify(existing) === jsonKey)) {
+          list.push(serialized);
+        }
+      }
     }
 
     const callerId = this.stack.enter(id, now);
@@ -253,6 +270,23 @@ export class RuntimeCollector {
       if (fn.calls > 0) totalExecuted++;
     }
 
+    const seeds = [];
+    if (this.captureSeeds) {
+      for (const [id, argSets] of this.seeds.entries()) {
+        const meta = this.metadata.get(id);
+        if (meta && argSets.length > 0) {
+          seeds.push({
+            id,
+            file: meta.file,
+            name: meta.name,
+            line: meta.line,
+            column: meta.column,
+            calls: argSets
+          });
+        }
+      }
+    }
+
     const currentPid = typeof process !== 'undefined' && process && process.pid ? process.pid : 1;
 
     return {
@@ -265,7 +299,8 @@ export class RuntimeCollector {
       totalExecuted,
       files,
       functions,
-      edges
+      edges,
+      seeds
     };
   }
 
@@ -279,7 +314,41 @@ export class RuntimeCollector {
     this.maxConcurrent.fill(0);
     this.errors.fill(0);
     this.edges.clear();
+    this.seeds.clear();
     this.stack = new CallStack(this.stack.capacity);
     this.startTime = Date.now();
   }
+}
+
+export function safeSerializeArgs(args, maxDepth = 2) {
+  if (!args) return [];
+  const list = Array.isArray(args) ? args : Array.from(args);
+  return list.map(item => safeCloneValue(item, maxDepth));
+}
+
+function safeCloneValue(val, depth) {
+  if (val === null || val === undefined) return val;
+  const t = typeof val;
+  if (t === 'number' || t === 'boolean' || t === 'string') return val;
+  if (t === 'bigint') return `${val}n`;
+  if (t === 'symbol') return val.toString();
+  if (t === 'function') return '[Function]';
+  if (depth <= 0) return '[Object]';
+
+  if (Array.isArray(val)) {
+    return val.slice(0, 20).map(v => safeCloneValue(v, depth - 1));
+  }
+  if (typeof val === 'object') {
+    try {
+      const copy = {};
+      const keys = Object.keys(val).slice(0, 20);
+      for (const k of keys) {
+        copy[k] = safeCloneValue(val[k], depth - 1);
+      }
+      return copy;
+    } catch {
+      return '[Unserializable Object]';
+    }
+  }
+  return String(val);
 }

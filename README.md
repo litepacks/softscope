@@ -289,6 +289,43 @@ softscope bench/run.js --output benchmark-data.json
 softscope --live bench/stress-test.js
 ```
 
+### 8. Performance Comparison & CI Regression Gating
+Capture a baseline profile and detect performance regressions across code revisions or in CI:
+
+```bash
+# Save a baseline performance snapshot
+softscope bench/run.js --save-baseline baseline.json
+
+# Run current code and compare directly against the baseline
+softscope bench/run.js --compare baseline.json
+
+# Compare two saved snapshots offline with Markdown or AI diagnostics
+softscope compare baseline.json current.json --md
+softscope compare baseline.json current.json --ai
+
+# CI Quality Gate: Exit with code 1 if any function regresses by > 15%
+softscope bench/run.js --compare baseline.json --fail-on-regression 15
+```
+
+### 9. Autonomous Micro-Benchmarking & Edge-Case Discovery (`auto-bench`)
+Benchmark JavaScript/TypeScript functions **without writing benchmark boilerplate**. Softscope statically discovers exported functions, infers parameter types and defaults from the AST, measures high-resolution execution speeds (`ops/sec`, `avg`, `min`, `max`), and subjects each function to boundary mutations to uncover **unhandled exceptions** and **latency cliffs** (>10× latency spikes):
+
+```bash
+# Auto-discover exports and benchmark with boundary edge-case fuzzing
+softscope auto-bench src/math.js
+
+# Benchmark all functions (including non-exported internals)
+softscope auto-bench src/parser.js --all
+
+# Run auto-bench with Markdown or AI diagnostic output
+softscope auto-bench src/engine.js --md
+softscope auto-bench src/engine.js --ai
+
+# Record real argument shapes during tests for high-fidelity replay
+softscope npm test --capture-seeds .softscope/seeds.json
+softscope auto-bench src/core.js --seeds .softscope/seeds.json
+```
+
 ---
 
 ## In-Browser Profiling & Vite Plugin (`softscope/vite`)
@@ -383,6 +420,10 @@ __softscope.toggleOverlay();
 
 | Flag | Description |
 |------|-------------|
+| `auto-bench <file>` | Autonomous micro-benchmarking with AST analysis and edge-case fuzzing |
+| `--capture-seeds [file]` | Record real function argument samples during test execution |
+| `--seeds <file>` | Load captured seeds for auto-benchmarking |
+| `--fuzz`, `--no-fuzz` | Enable or disable boundary/edge-case fuzzing during auto-bench |
 | `--save-baseline <file>` | Save execution metrics as baseline JSON profile |
 | `--compare <file>`, `--baseline` | Compare current execution against baseline JSON profile |
 | `compare <base> <curr>` | Compare two saved JSON profiles offline |

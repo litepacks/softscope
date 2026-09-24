@@ -80,7 +80,8 @@ export async function load(url, context, nextLoad) {
 
   const relativePath = path.relative(projectRoot, filePath);
   const transformed = transformSource(source, filePath, relativePath, registry, {
-    strict: Boolean(config.strict)
+    strict: Boolean(config.strict),
+    captureSeeds: Boolean(config.captureSeeds)
   });
 
   return {

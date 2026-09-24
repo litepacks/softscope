@@ -10,6 +10,8 @@ Softscope is a lightweight, zero-bloat Node.js CLI tool specifically engineered 
 
 ### Key Capabilities
 - **Microscopic Function Profiling**: Measures exact function call frequencies, total durations, self-times (exclusive duration subtracting child calls), and min/avg/max latencies.
+- **Autonomous Micro-Benchmarking & Fuzz-Bench**: Automatically analyzes functions and dependencies, synthesizes inputs, measures ops/sec throughput, and hunts down latency cliffs and unhandled edge-case crashes.
+- **Dynamic Seed Capture (Record & Replay)**: Captures real function arguments during test runs (`--capture-seeds`) to replay as hyper-realistic micro-benchmarks.
 - **Caller-Callee Call Graphs**: Discovers which functions call which, along with call counts.
 - **Runtime Reach**: Compares statically discovered functions against runtime-executed functions to identify untouched code or untriggered branches.
 - **Zero-Config Transparency**: Preserves target process arguments, environment variables, exit codes, stdio, and signal handling without modifying application source code.
@@ -57,6 +59,11 @@ softscope/
 │   │   ├── index.js          # Vite plugin factory (virtual module resolution, HTML injection, transform)
 │   │   ├── client.js         # Browser client singleton (window.__softscope API, snapshot, reset)
 │   │   └── overlay.js        # Zero-dependency in-browser floating HUD badge & ShadowRoot diagnostics drawer
+│   ├── autobench/
+│   │   ├── analyze.js        # AST candidate function and parameter analyzer
+│   │   ├── seeds.js          # Seed synthesis, captured seed loader, and boundary mutation fuzzer
+│   │   ├── harness.js        # Synthetic benchmark executor, latency cliff and crash detector
+│   │   └── report.js         # Multi-format report renderers for auto-bench results
 │   └── report/
 │       ├── compare.js        # Performance comparison engine and delta report renderers
 │       ├── format.js         # Duration/number formatters and terminal table rendering
@@ -67,6 +74,7 @@ softscope/
 │       ├── live.js           # Periodic live stderr status reporter for --live mode
 │       └── summary.js        # Multi-process dump aggregator and runtime reach calculator
 ├── test/
+│   ├── autobench.test.js     # Auto-bench, seed synthesis, and edge-case fuzzing tests
 │   ├── cli.test.js           # CLI end-to-end and exit code propagation tests
 │   ├── collector.test.js     # Unit tests for TypedArray accumulator & stack edge calculations
 │   ├── compare.test.js       # Unit and CLI tests for baseline capture, compare & threshold gating
@@ -76,7 +84,7 @@ softscope/
 │   ├── parse.test.js         # OXC parsing & anonymous function naming heuristics tests
 │   ├── transform.test.js     # Surgical AST code rewriting & semantics preservation tests
 │   └── vite.test.js          # Vite plugin hooks, virtual module, HTML injection & browser client tests
-├── fixtures/                 # Test sample applications (simple, error, npm-script)
+├── fixtures/                 # Test sample applications (simple, error, autobench, npm-script)
 ├── bench/
 │   ├── run.js                # Micro-benchmark comparing baseline vs Softscope instrumentation overhead
 │   └── target.js             # High-frequency function call benchmark target

@@ -2,7 +2,7 @@ import MagicString from 'magic-string';
 import { parseSource, createSourceLocator } from './parse.js';
 
 export function transformSource(code, filename, relativePath, registry, options = {}) {
-  const { strict = false, clientImport } = options;
+  const { strict = false, clientImport, captureSeeds = false } = options;
 
   let parseResult;
   try {
@@ -59,12 +59,24 @@ export function transformSource(code, filename, relativePath, registry, options 
       const node = fn.node;
       const id = fn.id;
 
+      let argsExpr = '';
+      if (captureSeeds) {
+        if (node.type === 'ArrowFunctionExpression') {
+          const paramNames = (node.params || [])
+            .map(p => (p.type === 'Identifier' ? p.name : p.left && p.left.type === 'Identifier' ? p.left.name : null))
+            .filter(Boolean);
+          argsExpr = paramNames.length > 0 ? `, [${paramNames.join(', ')}]` : '';
+        } else {
+          argsExpr = `, typeof arguments !== 'undefined' ? arguments : null`;
+        }
+      }
+
       if (node.type === 'ArrowFunctionExpression' && node.expression) {
         // Concise arrow function: () => expr
         const bodyStart = node.body.start;
         const bodyEnd = node.body.end;
 
-        s.prependLeft(bodyStart, `{ __softscope.enter(${id}); try { return (`);
+        s.prependLeft(bodyStart, `{ __softscope.enter(${id}${argsExpr}); try { return (`);
         s.appendRight(bodyEnd, `); } finally { __softscope.exit(${id}); } }`);
       } else if (node.body && node.body.type === 'BlockStatement') {
         // Standard block function
@@ -89,8 +101,8 @@ export function transformSource(code, filename, relativePath, registry, options 
 
         const isAfterDirective = insertPos > node.body.start + 1;
         const enterCode = isAfterDirective
-          ? `\n__softscope.enter(${id}); try {\n`
-          : ` __softscope.enter(${id}); try { `;
+          ? `\n__softscope.enter(${id}${argsExpr}); try {\n`
+          : ` __softscope.enter(${id}${argsExpr}); try { `;
         const exitCode = ` } finally { __softscope.exit(${id}); } `;
 
         const exitPos = node.body.end - 1;

@@ -28,6 +28,11 @@ export function parseCliArgs(rawArgs, cwd = process.cwd()) {
     saveBaseline: null,
     compare: null,
     failOnRegression: null,
+    captureSeeds: null,
+    seeds: null,
+    fuzz: true,
+    iterations: 10000,
+    all: false,
     help: false,
     version: false,
     projectRoot: path.resolve(cwd),
@@ -130,6 +135,38 @@ export function parseCliArgs(rawArgs, cwd = process.cwd()) {
     } else if (arg.startsWith('--fail-on-regression=')) {
       const val = parseFloat(arg.slice('--fail-on-regression='.length));
       options.failOnRegression = !isNaN(val) ? val : 10;
+      i++;
+    } else if (arg === '--capture-seeds') {
+      if (rawArgs[i + 1] && !rawArgs[i + 1].startsWith('-')) {
+        options.captureSeeds = path.resolve(cwd, rawArgs[i + 1]);
+        i += 2;
+      } else {
+        options.captureSeeds = path.resolve(cwd, 'seeds.json');
+        i++;
+      }
+    } else if (arg.startsWith('--capture-seeds=')) {
+      options.captureSeeds = path.resolve(cwd, arg.slice('--capture-seeds='.length));
+      i++;
+    } else if (arg === '--seeds') {
+      options.seeds = rawArgs[i + 1] ? path.resolve(cwd, rawArgs[i + 1]) : null;
+      i += 2;
+    } else if (arg.startsWith('--seeds=')) {
+      options.seeds = path.resolve(cwd, arg.slice('--seeds='.length));
+      i++;
+    } else if (arg === '--fuzz') {
+      options.fuzz = true;
+      i++;
+    } else if (arg === '--no-fuzz') {
+      options.fuzz = false;
+      i++;
+    } else if (arg === '--iterations') {
+      options.iterations = parseInt(rawArgs[i + 1], 10) || 10000;
+      i += 2;
+    } else if (arg.startsWith('--iterations=')) {
+      options.iterations = parseInt(arg.slice('--iterations='.length), 10) || 10000;
+      i++;
+    } else if (arg === '--all') {
+      options.all = true;
       i++;
     } else {
       command.push(arg);

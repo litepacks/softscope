@@ -116,6 +116,7 @@ export async function runCommand(options) {
     SOFTSCOPE_SESSION_DIR: sessionDir,
     SOFTSCOPE_CONFIG: JSON.stringify(options),
     SOFTSCOPE_LIVE: (options.live || options.tui) ? '1' : '0',
+    SOFTSCOPE_CAPTURE_SEEDS: options.captureSeeds ? '1' : '0',
     SOFTSCOPE_IPC_SOCKET: socketPath
   };
 
@@ -200,6 +201,48 @@ export async function runCommand(options) {
 
       // Aggregate metrics
       const summary = mergeSessionSnapshots(snapshots, overallDurationMs);
+
+      // Save captured seeds if requested
+      if (options.captureSeeds) {
+        try {
+          const seedsMap = new Map();
+          for (const snap of snapshots) {
+            if (snap.seeds && Array.isArray(snap.seeds)) {
+              for (const s of snap.seeds) {
+                const key = `${s.file}:${s.name}:${s.line}:${s.column}`;
+                let entry = seedsMap.get(key);
+                if (!entry) {
+                  entry = {
+                    file: s.file,
+                    name: s.name,
+                    line: s.line,
+                    column: s.column,
+                    calls: []
+                  };
+                  seedsMap.set(key, entry);
+                }
+                for (const callArgs of s.calls) {
+                  const jsonStr = JSON.stringify(callArgs);
+                  if (!entry.calls.some(existing => JSON.stringify(existing) === jsonStr)) {
+                    if (entry.calls.length < 10) {
+                      entry.calls.push(callArgs);
+                    }
+                  }
+                }
+              }
+            }
+          }
+          const seedsPayload = {
+            version: 1,
+            type: 'softscope-seeds',
+            timestamp: Date.now(),
+            seeds: Array.from(seedsMap.values())
+          };
+          fs.writeFileSync(options.captureSeeds, JSON.stringify(seedsPayload, null, 2), 'utf-8');
+        } catch (err) {
+          console.error(`[softscope] Failed to save captured seeds to ${options.captureSeeds}: ${err.message}`);
+        }
+      }
 
       // Save baseline if requested
       if (options.saveBaseline) {
@@ -449,10 +492,15 @@ Usage:
   softscope <file>
   softscope <command> [...args]
   softscope compare <baseline.json> <current.json>
+  softscope auto-bench <file> [options]
 
 Examples:
   softscope app.js
   softscope bench/run.js
+  softscope auto-bench src/math.js
+  softscope auto-bench src/math.js --md
+  softscope npm test --capture-seeds
+  softscope auto-bench src/math.js --seeds seeds.json
   softscope bench/run.js --save-baseline baseline.json
   softscope bench/run.js --compare baseline.json
   softscope compare base.json current.json --md
@@ -461,6 +509,12 @@ Examples:
   softscope -o report.md app.js
 
 Options:
+  --capture-seeds [file]   Record real function argument samples to seeds JSON file
+  --seeds <file>           Use captured seeds for auto-benchmarking
+  --fuzz                   Enable boundary/edge-case fuzzing during auto-bench (default: true)
+  --no-fuzz                Disable edge-case fuzzing during auto-bench
+  --iterations <n>         Number of iterations per function in auto-bench (default: 10000)
+  --all                    Benchmark all top-level functions (including unexported ones)
   --save-baseline <file>   Save execution metrics as baseline JSON profile
   --compare <file>         Compare current execution against baseline JSON profile
   --baseline <file>        Alias for --compare
