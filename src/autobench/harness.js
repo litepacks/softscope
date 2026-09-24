@@ -15,14 +15,55 @@ import {
 /**
  * Generates temporary benchmark runner code to execute candidate functions safely.
  */
-function generateRunnerScript(filePath, testCases, iterations = 10000) {
+function generateRunnerScript(filePath, testCases, iterations = 10000, resultsPath) {
   const targetUrl = pathToFileURL(filePath).href;
 
   return `
+import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
+// Prevent console pollution, stdout interference, and premature process.exit during micro-benchmarking
+const noop = () => {};
+const origLog = console.log;
+const origInfo = console.info;
+const origWarn = console.warn;
+const origError = console.error;
+const origStdoutWrite = process.stdout.write.bind(process.stdout);
+const origStderrWrite = process.stderr.write.bind(process.stderr);
+const origExit = process.exit.bind(process);
+
+function mute() {
+  console.log = noop;
+  console.info = noop;
+  console.warn = noop;
+  console.error = noop;
+  process.stdout.write = noop;
+  process.stderr.write = noop;
+  process.exit = (code) => {
+    throw new Error('process.exit(' + code + ') called');
+  };
+}
+
+function unmute() {
+  console.log = origLog;
+  console.info = origInfo;
+  console.warn = origWarn;
+  console.error = origError;
+  process.stdout.write = origStdoutWrite;
+  process.stderr.write = origStderrWrite;
+  process.exit = origExit;
+}
+
 async function run() {
-  const targetMod = await import(${JSON.stringify(targetUrl)});
+  let targetMod;
+  try {
+    targetMod = await import(${JSON.stringify(targetUrl)});
+  } catch (importErr) {
+    unmute();
+    origError('[softscope-autobench-import-error]', importErr);
+    process.exit(1);
+  }
+
   const testCases = ${JSON.stringify(testCases)};
   const targetIterations = ${iterations};
   const results = [];
@@ -49,6 +90,8 @@ async function run() {
     const baselineSeed = tc.baselineSeed;
     const isAsync = tc.async;
 
+    mute();
+
     // 1. Warmup
     try {
       for (let i = 0; i < 50; i++) {
@@ -58,7 +101,7 @@ async function run() {
         }
       }
     } catch (warmupErr) {
-      // If baseline seed itself fails
+      unmute();
       results.push({
         name: tc.name,
         exportName: tc.exportName,
@@ -72,17 +115,21 @@ async function run() {
     let iters = 0;
     const start = performance.now();
 
-    if (isAsync) {
-      const asyncIters = Math.min(targetIterations, 500);
-      for (let i = 0; i < asyncIters; i++) {
-        await fn(...baselineSeed);
-        iters++;
+    try {
+      if (isAsync) {
+        const asyncIters = Math.min(targetIterations, 500);
+        for (let i = 0; i < asyncIters; i++) {
+          await fn(...baselineSeed);
+          iters++;
+        }
+      } else {
+        for (let i = 0; i < targetIterations; i++) {
+          fn(...baselineSeed);
+          iters++;
+        }
       }
-    } else {
-      for (let i = 0; i < targetIterations; i++) {
-        fn(...baselineSeed);
-        iters++;
-      }
+    } catch (loopErr) {
+      // Loop execution error
     }
 
     const totalTimeMs = performance.now() - start;
@@ -94,12 +141,16 @@ async function run() {
     let maxMs = 0;
     const sampleCount = 30;
     for (let s = 0; s < sampleCount; s++) {
-      const s0 = performance.now();
-      const p = fn(...baselineSeed);
-      if (isAsync && p && typeof p.then === 'function') await p;
-      const d = performance.now() - s0;
-      if (d < minMs) minMs = d;
-      if (d > maxMs) maxMs = d;
+      try {
+        const s0 = performance.now();
+        const p = fn(...baselineSeed);
+        if (isAsync && p && typeof p.then === 'function') await p;
+        const d = performance.now() - s0;
+        if (d < minMs) minMs = d;
+        if (d > maxMs) maxMs = d;
+      } catch {
+        // Ignore sampling errors
+      }
     }
     if (minMs === Infinity) minMs = avgMs;
 
@@ -133,6 +184,8 @@ async function run() {
       }
     }
 
+    unmute();
+
     results.push({
       name: tc.name,
       exportName: tc.exportName,
@@ -150,11 +203,13 @@ async function run() {
     });
   }
 
-  process.stdout.write(JSON.stringify(results));
+  unmute();
+  fs.writeFileSync(${JSON.stringify(resultsPath)}, JSON.stringify(results), 'utf-8');
 }
 
 run().catch((err) => {
-  console.error('[softscope-autobench-runner-error]', err);
+  unmute();
+  origError('[softscope-autobench-runner-error]', err);
   process.exit(1);
 });
 `;
@@ -207,36 +262,40 @@ export async function runAutoBench(options) {
 
   // 4. Generate and run temporary harness script
   const iterations = options.iterations || 10000;
-  const runnerScript = generateRunnerScript(targetFile, testCases, iterations);
-
   const tmpRunnerPath = path.join(
     os.tmpdir(),
-    `softscope-autobench-${process.pid}-${Date.now()}.mjs`
+    `softscope-autobench-runner-${process.pid}-${Date.now()}.mjs`
   );
+  const tmpResultsPath = path.join(
+    os.tmpdir(),
+    `softscope-autobench-results-${process.pid}-${Date.now()}.json`
+  );
+
+  const runnerScript = generateRunnerScript(targetFile, testCases, iterations, tmpResultsPath);
   fs.writeFileSync(tmpRunnerPath, runnerScript, 'utf-8');
 
-  let rawOutput = '';
   let exitCode = 0;
 
   try {
     const child = spawn(process.execPath, [tmpRunnerPath], {
       cwd: options.projectRoot || process.cwd(),
       env: { ...process.env },
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['ignore', 'ignore', 'pipe']
     });
 
-    child.stdout.on('data', chunk => {
-      rawOutput += chunk.toString('utf-8');
-    });
-
+    let stderrOutput = '';
     child.stderr.on('data', chunk => {
-      process.stderr.write(chunk);
+      stderrOutput += chunk.toString('utf-8');
     });
 
     exitCode = await new Promise(resolve => {
       child.on('close', code => resolve(code || 0));
       child.on('error', () => resolve(1));
     });
+
+    if (exitCode !== 0 && stderrOutput) {
+      process.stderr.write(stderrOutput);
+    }
   } finally {
     try {
       if (fs.existsSync(tmpRunnerPath)) {
@@ -249,15 +308,26 @@ export async function runAutoBench(options) {
 
   if (exitCode !== 0) {
     console.error('[softscope] Auto-benchmark execution failed.');
+    try {
+      if (fs.existsSync(tmpResultsPath)) fs.unlinkSync(tmpResultsPath);
+    } catch {}
     return exitCode;
   }
 
   let fnResults = [];
   try {
-    fnResults = JSON.parse(rawOutput);
+    if (!fs.existsSync(tmpResultsPath)) {
+      throw new Error('Results file was not created by the benchmark runner');
+    }
+    const rawData = fs.readFileSync(tmpResultsPath, 'utf-8');
+    fnResults = JSON.parse(rawData);
   } catch (err) {
     console.error(`[softscope] Failed to parse benchmark results: ${err.message}`);
     return 1;
+  } finally {
+    try {
+      if (fs.existsSync(tmpResultsPath)) fs.unlinkSync(tmpResultsPath);
+    } catch {}
   }
 
   const results = {
