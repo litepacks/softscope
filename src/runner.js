@@ -585,11 +585,14 @@ Usage:
   softscope <command> [...args]
   softscope compare <baseline.json> <current.json>
   softscope auto-bench <file> [options]
+  softscope test [...args]
   softscope pin <target>
   softscope diff [target]
 
 Examples:
   softscope app.js
+  softscope test
+  softscope test --no-capture
   softscope bench/run.js
   softscope pin bench/run.js
   softscope diff bench/run.js
@@ -599,7 +602,6 @@ Examples:
   softscope auto-bench src/math.js --watch
   softscope auto-bench src/math.js --pick
   softscope auto-bench src/math.js --md
-  softscope npm test --capture-seeds
   softscope auto-bench src/math.js --seeds seeds.json
   softscope bench/run.js --save-baseline baseline.json
   softscope bench/run.js --compare baseline.json
@@ -610,12 +612,14 @@ Examples:
   softscope -o report.md app.js
 
 Options:
+  --config <file>          Path to JSON configuration file (.softscoperc, softscope.config.json)
   --pin                    Pin current execution profile to .softscope/last-pin.json
   --diff                   Compare current execution against pinned baseline (.softscope/last-pin.json)
   --watch, -w              Watch target file and directory for changes and automatically re-run
   --pick, -i               Interactively select functions to benchmark from terminal checklist
   --filter <pattern>       Filter functions to benchmark by name or glob (aliases: --fn, --match)
   --capture-seeds [file]   Record real function argument samples to seeds JSON file
+  --no-capture             Disable automatic seed capture when running softscope test
   --seeds <file>           Use captured seeds for auto-benchmarking
   --fuzz                   Enable boundary/edge-case fuzzing during auto-bench (default: true)
   --no-fuzz                Disable edge-case fuzzing during auto-bench

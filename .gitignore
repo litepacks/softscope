@@ -17,6 +17,9 @@ coverage/
 dist/
 scratch/
 *.tgz
+seeds.json
+*.baseline.json
+baseline.json
 
 # Environment & local configs
 .env

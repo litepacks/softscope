@@ -1,6 +1,7 @@
 import { parseCliArgs } from './config.js';
 import { runCommand, runStandaloneCompare, printHelp } from './runner.js';
 import { runAutoBench } from './autobench/harness.js';
+import { runTestBridge } from './test-bridge.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,6 +33,10 @@ export async function main(argv = process.argv.slice(2)) {
 
   if (options.command[0] === 'auto-bench') {
     return runAutoBench(options);
+  }
+
+  if (options.command[0] === 'test') {
+    return runTestBridge(options);
   }
 
   if (options.command[0] === 'pin') {

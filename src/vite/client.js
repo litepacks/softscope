@@ -3,7 +3,7 @@ import { RuntimeCollector } from '../runtime/collector.js';
 import { createOverlay } from './overlay.js';
 
 export function initSoftscopeClient(options = {}) {
-  if (globalThis.__softscope && globalThis.__softscope._collector) {
+  if (globalThis.__softscope && typeof globalThis.__softscope.getSnapshot === 'function') {
     return globalThis.__softscope;
   }
 

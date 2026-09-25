@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { loadConfig } from './rc.js';
 
 export const DEFAULT_EXTENSIONS = new Set([
   '.js',
@@ -12,34 +13,57 @@ export const DEFAULT_EXTENSIONS = new Set([
 ]);
 
 export function parseCliArgs(rawArgs, cwd = process.cwd()) {
+  let explicitConfig = null;
+  for (let idx = 0; idx < rawArgs.length; idx++) {
+    const a = rawArgs[idx];
+    if (a === '--config' && rawArgs[idx + 1] && !rawArgs[idx + 1].startsWith('-')) {
+      explicitConfig = rawArgs[idx + 1];
+    } else if (a.startsWith('--config=')) {
+      explicitConfig = a.slice('--config='.length);
+    }
+  }
+
+  let rcConfig = {};
+  let rcFile = null;
+  try {
+    const res = loadConfig(cwd, explicitConfig);
+    rcConfig = res.config || {};
+    rcFile = res.configFile;
+  } catch (err) {
+    if (explicitConfig) {
+      throw err;
+    }
+  }
+
   const options = {
-    live: false,
-    tui: false,
-    files: false,
-    json: false,
-    md: false,
-    ai: false,
-    output: null,
-    top: 10,
-    include: [],
-    exclude: [],
-    includeNodeModules: false,
-    strict: false,
-    saveBaseline: null,
-    compare: null,
-    failOnRegression: null,
-    captureSeeds: null,
-    seeds: null,
-    fuzz: true,
-    iterations: 10000,
-    all: false,
-    filter: null,
-    watch: false,
-    pick: false,
+    live: Boolean(rcConfig.live),
+    tui: Boolean(rcConfig.tui),
+    files: Boolean(rcConfig.files),
+    json: Boolean(rcConfig.json),
+    md: Boolean(rcConfig.md),
+    ai: Boolean(rcConfig.ai),
+    output: rcConfig.output ? path.resolve(cwd, rcConfig.output) : null,
+    top: typeof rcConfig.top === 'number' ? rcConfig.top : 10,
+    include: Array.isArray(rcConfig.include) ? [...rcConfig.include] : [],
+    exclude: Array.isArray(rcConfig.exclude) ? [...rcConfig.exclude] : [],
+    includeNodeModules: Boolean(rcConfig.includeNodeModules),
+    strict: Boolean(rcConfig.strict),
+    saveBaseline: rcConfig.saveBaseline ? path.resolve(cwd, rcConfig.saveBaseline) : null,
+    compare: rcConfig.compare ? path.resolve(cwd, rcConfig.compare) : null,
+    failOnRegression: typeof rcConfig.failOnRegression === 'number' ? rcConfig.failOnRegression : null,
+    captureSeeds: rcConfig.captureSeeds ? path.resolve(cwd, rcConfig.captureSeeds) : null,
+    seeds: rcConfig.seeds ? path.resolve(cwd, rcConfig.seeds) : null,
+    fuzz: typeof rcConfig.fuzz === 'boolean' ? rcConfig.fuzz : true,
+    iterations: typeof rcConfig.iterations === 'number' ? rcConfig.iterations : 10000,
+    all: Boolean(rcConfig.all),
+    filter: rcConfig.filter || null,
+    watch: Boolean(rcConfig.watch),
+    pick: Boolean(rcConfig.pick),
     pin: false,
     diff: false,
     help: false,
     version: false,
+    configFile: rcFile,
     projectRoot: path.resolve(cwd),
     command: []
   };
@@ -65,6 +89,13 @@ export function parseCliArgs(rawArgs, cwd = process.cwd()) {
 
     if (arg === '--help' || arg === '-h') {
       options.help = true;
+      i++;
+    } else if (arg === '--config') {
+      i += 2;
+    } else if (arg.startsWith('--config=')) {
+      i++;
+    } else if (arg === '--no-capture' || arg === '--no-capture-seeds') {
+      options.captureSeeds = null;
       i++;
     } else if (arg === '--version' || arg === '-v') {
       options.version = true;
