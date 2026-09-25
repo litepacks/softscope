@@ -19,14 +19,48 @@ import {
   renderCompareAiReport,
   renderCompareJsonReport
 } from './report/compare.js';
+import { runWatchLoop } from './watch.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REGISTER_PATH = path.resolve(__dirname, 'loader', 'register.js');
+
+let activeRunnerChild = null;
 
 export async function runCommand(options) {
   if (options.command.length === 0) {
     printHelp();
     return 0;
+  }
+
+  if (options.watch) {
+    const executable = options.command[0];
+    const resolvedTarget = path.resolve(options.projectRoot, executable);
+    const existsAsFile = fs.existsSync(resolvedTarget) && fs.statSync(resolvedTarget).isFile();
+    const watchTarget = existsAsFile ? resolvedTarget : options.projectRoot;
+    const watchPaths = [options.projectRoot];
+    if (existsAsFile) {
+      watchPaths.unshift(path.dirname(resolvedTarget));
+      watchPaths.unshift(resolvedTarget);
+    }
+
+    const singleOpts = { ...options, watch: false };
+    return runWatchLoop({
+      title: 'softscope',
+      targetPath: watchTarget,
+      watchPaths,
+      runTask: () => runCommandSingle(singleOpts)
+    });
+  }
+
+  return runCommandSingle(options);
+}
+
+export async function runCommandSingle(options) {
+  if (activeRunnerChild && !activeRunnerChild.killed) {
+    try {
+      activeRunnerChild.kill('SIGTERM');
+    } catch {}
+    activeRunnerChild = null;
   }
 
   // 1. Resolve executable and arguments
@@ -136,6 +170,8 @@ export async function runCommand(options) {
       stdio: childStdio
     });
 
+    activeRunnerChild = child;
+
     if (tui && child.stdout && child.stderr) {
       child.stdout.on('data', (chunk) => tui.appendLog(chunk, 'stdout'));
       child.stderr.on('data', (chunk) => tui.appendLog(chunk, 'stderr'));
@@ -159,6 +195,7 @@ export async function runCommand(options) {
     process.on('SIGHUP', forwardSignal);
 
     child.on('error', (err) => {
+      if (activeRunnerChild === child) activeRunnerChild = null;
       console.error(`[softscope] Failed to start command "${executable}": ${err.message}`);
       cleanup();
       if (tui) tui.close();
@@ -166,6 +203,7 @@ export async function runCommand(options) {
     });
 
     child.on('close', (code, signal) => {
+      if (activeRunnerChild === child) activeRunnerChild = null;
       const overallDurationMs = Date.now() - startTime;
 
       cleanup();
@@ -499,6 +537,8 @@ Examples:
   softscope bench/run.js
   softscope auto-bench src/math.js
   softscope auto-bench src/math.js --filter compute
+  softscope auto-bench src/math.js --watch
+  softscope auto-bench src/math.js --pick
   softscope auto-bench src/math.js --md
   softscope npm test --capture-seeds
   softscope auto-bench src/math.js --seeds seeds.json
@@ -506,10 +546,13 @@ Examples:
   softscope bench/run.js --compare baseline.json
   softscope compare base.json current.json --md
   softscope --tui bench/run.js
+  softscope --watch bench/run.js
   softscope --md bench/run.js
   softscope -o report.md app.js
 
 Options:
+  --watch, -w              Watch target file and directory for changes and automatically re-run
+  --pick, -i               Interactively select functions to benchmark from terminal checklist
   --filter <pattern>       Filter functions to benchmark by name or glob (aliases: --fn, --match)
   --capture-seeds [file]   Record real function argument samples to seeds JSON file
   --seeds <file>           Use captured seeds for auto-benchmarking

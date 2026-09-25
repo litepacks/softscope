@@ -34,6 +34,8 @@ export function parseCliArgs(rawArgs, cwd = process.cwd()) {
     iterations: 10000,
     all: false,
     filter: null,
+    watch: false,
+    pick: false,
     help: false,
     version: false,
     projectRoot: path.resolve(cwd),
@@ -180,6 +182,12 @@ export function parseCliArgs(rawArgs, cwd = process.cwd()) {
       i++;
     } else if (arg.startsWith('--match=')) {
       options.filter = arg.slice('--match='.length);
+      i++;
+    } else if (arg === '--watch' || arg === '-w') {
+      options.watch = true;
+      i++;
+    } else if (arg === '--pick' || arg === '-i' || arg === '--interactive') {
+      options.pick = true;
       i++;
     } else {
       command.push(arg);

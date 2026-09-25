@@ -157,11 +157,11 @@ softscope bench/run.js --compare baseline.json
 # Compare two saved profiles offline with Markdown output
 softscope compare baseline.json current.json --md
 
-# Run a sample fixture with AI/LLM diagnostic output
-softscope fixtures/simple/index.js --ai
+# Run auto-bench in watch mode with instant hot-reloading on save
+softscope auto-bench fixtures/simple/index.js --watch
 
-# Run a sample fixture with Markdown output
-softscope fixtures/simple/index.js --md
+# Run auto-bench with interactive terminal function picker
+softscope auto-bench fixtures/simple/index.js --pick
 
 # Run a sample fixture saving to a file
 softscope fixtures/simple/index.js -o /tmp/report.md

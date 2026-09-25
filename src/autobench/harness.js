@@ -12,6 +12,8 @@ import {
   renderAutoBenchAiReport,
   renderAutoBenchJsonReport
 } from './report.js';
+import { promptFunctionPicker } from '../picker.js';
+import { runWatchLoop } from '../watch.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -279,18 +281,16 @@ function findTsRunner(targetFile, projectRoot) {
   };
 }
 
-/**
- * Main entry point for auto-benchmarking a module.
- */
-export async function runAutoBench(options) {
-  const args = options.command.slice(1);
-  if (args.length === 0) {
-    console.error('[softscope] Error: auto-bench requires a target file.');
-    console.error('Usage: softscope auto-bench <file> [options]');
-    return 1;
-  }
+let activeBenchChild = null;
 
-  const targetFile = path.resolve(options.projectRoot || process.cwd(), args[0]);
+export async function executeAutoBenchSingle(targetFile, options, pickedFunctions = null) {
+  // If a child is still running from a previous debounce/change, kill it cleanly
+  if (activeBenchChild && !activeBenchChild.killed) {
+    try {
+      activeBenchChild.kill('SIGTERM');
+    } catch {}
+    activeBenchChild = null;
+  }
 
   // 1. Analyze target module
   let analysis;
@@ -301,8 +301,11 @@ export async function runAutoBench(options) {
     return 1;
   }
 
-  // Apply function filter if provided (--filter, --fn, --match)
-  if (options.filter) {
+  // Apply picked functions or filter
+  if (pickedFunctions && pickedFunctions.length > 0) {
+    const pickedKeys = new Set(pickedFunctions.map(f => f.exportName || f.name));
+    analysis.functions = analysis.functions.filter(f => pickedKeys.has(f.exportName || f.name));
+  } else if (options.filter) {
     const pattern = options.filter.trim();
     const isGlob = pattern.includes('*') || pattern.includes('?') || pattern.includes('[');
     const matcher = isGlob ? picomatch(pattern, { nocase: true }) : null;
@@ -395,14 +398,22 @@ export async function runAutoBench(options) {
       stdio: ['ignore', 'ignore', 'pipe']
     });
 
+    activeBenchChild = child;
+
     let stderrOutput = '';
     child.stderr.on('data', chunk => {
       stderrOutput += chunk.toString('utf-8');
     });
 
     exitCode = await new Promise(resolve => {
-      child.on('close', code => resolve(code || 0));
-      child.on('error', () => resolve(1));
+      child.on('close', code => {
+        if (activeBenchChild === child) activeBenchChild = null;
+        resolve(code || 0);
+      });
+      child.on('error', () => {
+        if (activeBenchChild === child) activeBenchChild = null;
+        resolve(1);
+      });
     });
 
     if (exitCode !== 0 && stderrOutput) {
@@ -484,4 +495,69 @@ export async function runAutoBench(options) {
   }
 
   return 0;
+}
+
+/**
+ * Main entry point for auto-benchmarking a module.
+ */
+export async function runAutoBench(options) {
+  const args = options.command.slice(1);
+  if (args.length === 0) {
+    console.error('[softscope] Error: auto-bench requires a target file.');
+    console.error('Usage: softscope auto-bench <file> [options]');
+    return 1;
+  }
+
+  const targetFile = path.resolve(options.projectRoot || process.cwd(), args[0]);
+  if (!fs.existsSync(targetFile)) {
+    console.error(`[softscope] Target file not found: ${targetFile}`);
+    return 1;
+  }
+
+  let pickedFunctions = null;
+  if (options.pick && process.stdin.isTTY) {
+    try {
+      const initialAnalysis = analyzeModule(targetFile, { all: Boolean(options.all) });
+      const picked = await promptFunctionPicker(initialAnalysis.functions, {
+        title: `Select functions to benchmark in ${path.basename(targetFile)}`
+      });
+      if (!picked || picked.length === 0) {
+        console.log('[softscope] No functions selected. Exiting.');
+        return 0;
+      }
+      pickedFunctions = picked;
+    } catch (err) {
+      console.error(`[softscope] Analysis failed: ${err.message}`);
+      return 1;
+    }
+  }
+
+  if (options.watch) {
+    const targetProjectRoot = findProjectRoot(targetFile, options.projectRoot);
+    const watchPaths = [targetFile, path.dirname(targetFile), targetProjectRoot];
+
+    return runWatchLoop({
+      title: 'auto-bench',
+      targetPath: targetFile,
+      watchPaths,
+      runTask: async () => {
+        return executeAutoBenchSingle(targetFile, options, pickedFunctions);
+      },
+      onPick: process.stdin.isTTY ? async () => {
+        try {
+          const freshAnalysis = analyzeModule(targetFile, { all: Boolean(options.all) });
+          const repicked = await promptFunctionPicker(freshAnalysis.functions, {
+            title: `Select functions to benchmark in ${path.basename(targetFile)}`
+          });
+          if (repicked && repicked.length > 0) {
+            pickedFunctions = repicked;
+          }
+        } catch (err) {
+          console.error(`[softscope] Function discovery error: ${err.message}`);
+        }
+      } : null
+    });
+  }
+
+  return executeAutoBenchSingle(targetFile, options, pickedFunctions);
 }

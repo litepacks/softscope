@@ -318,6 +318,13 @@ softscope auto-bench src/math.js
 softscope auto-bench src/math.js --filter compute
 softscope auto-bench packages/core/src/index.ts --filter "tokenize*"
 
+# Watch mode: automatically re-run on save with instant feedback
+softscope auto-bench src/math.js --watch
+softscope auto-bench packages/core/src/index.ts --filter tokenizeSql -w
+
+# Interactive function picker: select functions from terminal checklist
+softscope auto-bench packages/core/src/index.ts --pick
+
 # Benchmark all functions (including non-exported internals)
 softscope auto-bench src/parser.js --all
 
@@ -425,6 +432,8 @@ __softscope.toggleOverlay();
 | Flag | Description |
 |------|-------------|
 | `auto-bench <file>` | Autonomous micro-benchmarking with AST analysis and edge-case fuzzing |
+| `--watch`, `-w` | Watch target file and directory for changes and automatically re-run on save |
+| `--pick`, `-i` | Interactively select functions to benchmark from terminal checklist |
 | `--filter <pattern>`, `--fn`, `--match` | Filter functions to benchmark by name or glob pattern (e.g. `--filter "parse*"`) |
 | `--capture-seeds [file]` | Record real function argument samples during test execution |
 | `--seeds <file>` | Load captured seeds for auto-benchmarking |
