@@ -15,6 +15,14 @@ import {
 import { promptFunctionPicker } from '../picker.js';
 import { runWatchLoop } from '../watch.js';
 import { parseStackFrame, createCodeFrame } from '../report/codeframe.js';
+import { loadBaseline } from '../report/compare.js';
+import {
+  computeAutoBenchDelta,
+  renderAutoBenchCompareTerminalReport,
+  renderAutoBenchCompareMarkdownReport,
+  renderAutoBenchCompareAiReport,
+  renderAutoBenchCompareJsonReport
+} from './compare.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -491,15 +499,52 @@ export async function executeAutoBenchSingle(targetFile, options, pickedFunction
     totalCliffs: fnResults.reduce((acc, f) => acc + (f.cliffs ? f.cliffs.length : 0), 0)
   };
 
-  // 5. Output to file if requested
+  // 5. Save baseline if requested
+  if (options.saveBaseline) {
+    try {
+      const jsonBaseline = renderAutoBenchJsonReport(results);
+      fs.mkdirSync(path.dirname(options.saveBaseline), { recursive: true });
+      fs.writeFileSync(options.saveBaseline, jsonBaseline, 'utf-8');
+      if (options.pin) {
+        console.log(`[softscope] 📌 Pinned baseline saved to ${path.relative(process.cwd(), options.saveBaseline) || options.saveBaseline}`);
+      }
+    } catch (err) {
+      console.error(`[softscope] Failed to save baseline to ${options.saveBaseline}: ${err.message}`);
+    }
+  }
+
+  // 6. If comparison requested
+  let compareDelta = null;
+  if (options.compare) {
+    try {
+      const baselineData = loadBaseline(options.compare);
+      compareDelta = computeAutoBenchDelta(baselineData, results, {
+        threshold: options.failOnRegression != null ? options.failOnRegression : 10
+      });
+    } catch (err) {
+      console.error(`[softscope] Comparison failed: ${err.message}`);
+    }
+  }
+
+  // 7. Output to file if requested
   if (options.output) {
     let fileContent;
-    if (options.ai || options.output.endsWith('.ai') || options.output.endsWith('.llm')) {
-      fileContent = renderAutoBenchAiReport(results, options);
-    } else if (options.md || options.output.endsWith('.md')) {
-      fileContent = renderAutoBenchMarkdownReport(results, options);
+    if (compareDelta) {
+      if (options.ai || options.output.endsWith('.ai') || options.output.endsWith('.llm')) {
+        fileContent = renderAutoBenchCompareAiReport(compareDelta, options);
+      } else if (options.md || options.output.endsWith('.md')) {
+        fileContent = renderAutoBenchCompareMarkdownReport(compareDelta, options);
+      } else {
+        fileContent = renderAutoBenchCompareJsonReport(compareDelta);
+      }
     } else {
-      fileContent = renderAutoBenchJsonReport(results);
+      if (options.ai || options.output.endsWith('.ai') || options.output.endsWith('.llm')) {
+        fileContent = renderAutoBenchAiReport(results, options);
+      } else if (options.md || options.output.endsWith('.md')) {
+        fileContent = renderAutoBenchMarkdownReport(results, options);
+      } else {
+        fileContent = renderAutoBenchJsonReport(results);
+      }
     }
 
     try {
@@ -509,7 +554,24 @@ export async function executeAutoBenchSingle(targetFile, options, pickedFunction
     }
   }
 
-  // 6. Output to stdout
+  // 8. Output to stdout
+  if (compareDelta) {
+    if (options.json) {
+      process.stdout.write(renderAutoBenchCompareJsonReport(compareDelta) + '\n');
+    } else if (options.ai) {
+      process.stdout.write('\n' + renderAutoBenchCompareAiReport(compareDelta, options) + '\n');
+    } else if (options.md) {
+      process.stdout.write('\n' + renderAutoBenchCompareMarkdownReport(compareDelta, options) + '\n');
+    } else {
+      process.stdout.write('\n' + renderAutoBenchCompareTerminalReport(compareDelta, options) + '\n');
+    }
+
+    if (options.failOnRegression != null && compareDelta.thresholdBreached) {
+      return 1;
+    }
+    return 0;
+  }
+
   if (options.json) {
     process.stdout.write(renderAutoBenchJsonReport(results) + '\n');
   } else if (options.ai) {
@@ -527,6 +589,11 @@ export async function executeAutoBenchSingle(targetFile, options, pickedFunction
  * Main entry point for auto-benchmarking a module.
  */
 export async function runAutoBench(options) {
+  if (options.diff && !fs.existsSync(options.compare)) {
+    console.error(`[softscope] Error: No pinned baseline found at ${path.relative(process.cwd(), options.compare) || options.compare}.`);
+    console.error('Run with --pin first (e.g. softscope pin auto-bench <target>).');
+    return 1;
+  }
   const args = options.command.slice(1);
   if (args.length === 0) {
     console.error('[softscope] Error: auto-bench requires a target file.');

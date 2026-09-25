@@ -36,6 +36,8 @@ export function parseCliArgs(rawArgs, cwd = process.cwd()) {
     filter: null,
     watch: false,
     pick: false,
+    pin: false,
+    diff: false,
     help: false,
     version: false,
     projectRoot: path.resolve(cwd),
@@ -189,9 +191,33 @@ export function parseCliArgs(rawArgs, cwd = process.cwd()) {
     } else if (arg === '--pick' || arg === '-i' || arg === '--interactive') {
       options.pick = true;
       i++;
+    } else if (arg === '--pin') {
+      options.pin = true;
+      options.saveBaseline = path.resolve(cwd, '.softscope/last-pin.json');
+      i++;
+    } else if (arg === '--diff') {
+      options.diff = true;
+      options.compare = path.resolve(cwd, '.softscope/last-pin.json');
+      i++;
     } else {
       command.push(arg);
       i++;
+    }
+  }
+
+  if (command.length > 0 && command[0] === 'pin') {
+    if (command.length > 1) {
+      options.pin = true;
+      options.saveBaseline = path.resolve(cwd, '.softscope/last-pin.json');
+      command.shift();
+    }
+  } else if (command.length > 0 && command[0] === 'diff') {
+    if (command.length === 3 && command[1].endsWith('.json') && command[2].endsWith('.json')) {
+      command[0] = 'compare';
+    } else if (command.length > 1) {
+      options.diff = true;
+      options.compare = path.resolve(cwd, '.softscope/last-pin.json');
+      command.shift();
     }
   }
 

@@ -34,5 +34,17 @@ export async function main(argv = process.argv.slice(2)) {
     return runAutoBench(options);
   }
 
+  if (options.command[0] === 'pin') {
+    console.error('[softscope] Error: pin requires a target file or command.');
+    console.error('Usage: softscope pin <file|command> [options] (e.g. softscope pin auto-bench src/math.js)');
+    return 1;
+  }
+
+  if (options.command[0] === 'diff') {
+    console.error('[softscope] Error: diff requires a target file or command.');
+    console.error('Usage: softscope diff <file|command> [options] (e.g. softscope diff auto-bench src/math.js)');
+    return 1;
+  }
+
   return runCommand(options);
 }

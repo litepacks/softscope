@@ -35,12 +35,13 @@ function visibleLength(str) {
 
 function truncateString(str, maxLen, fromLeft = false) {
   const s = String(str);
-  if (s.length <= maxLen) return s;
+  if (visibleLength(s) <= maxLen) return s;
+  const stripped = stripAnsi(s);
   if (maxLen <= 1) return '…';
   if (fromLeft) {
-    return '…' + s.slice(s.length - maxLen + 1);
+    return '…' + stripped.slice(stripped.length - maxLen + 1);
   }
-  return s.slice(0, maxLen - 1) + '…';
+  return stripped.slice(0, maxLen - 1) + '…';
 }
 
 function padRight(str, len) {

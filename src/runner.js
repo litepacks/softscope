@@ -19,6 +19,13 @@ import {
   renderCompareAiReport,
   renderCompareJsonReport
 } from './report/compare.js';
+import {
+  computeAutoBenchDelta,
+  renderAutoBenchCompareTerminalReport,
+  renderAutoBenchCompareMarkdownReport,
+  renderAutoBenchCompareAiReport,
+  renderAutoBenchCompareJsonReport
+} from './autobench/compare.js';
 import { runWatchLoop } from './watch.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -30,6 +37,12 @@ export async function runCommand(options) {
   if (options.command.length === 0) {
     printHelp();
     return 0;
+  }
+
+  if (options.diff && !fs.existsSync(options.compare)) {
+    console.error(`[softscope] Error: No pinned baseline found at ${path.relative(process.cwd(), options.compare) || options.compare}.`);
+    console.error('Run with --pin first (e.g. softscope pin <target>).');
+    return 1;
   }
 
   if (options.watch) {
@@ -285,8 +298,12 @@ export async function runCommandSingle(options) {
       // Save baseline if requested
       if (options.saveBaseline) {
         try {
+          fs.mkdirSync(path.dirname(options.saveBaseline), { recursive: true });
           const jsonBaseline = renderJsonReport(summary);
           fs.writeFileSync(options.saveBaseline, jsonBaseline, 'utf-8');
+          if (options.pin) {
+            console.log(`[softscope] 📌 Pinned baseline saved to ${path.relative(process.cwd(), options.saveBaseline) || options.saveBaseline}`);
+          }
         } catch (err) {
           console.error(`[softscope] Failed to save baseline to ${options.saveBaseline}: ${err.message}`);
         }
@@ -470,6 +487,43 @@ export function runStandaloneCompare(options) {
   }
 
   const threshold = options.failOnRegression != null ? options.failOnRegression : 10;
+
+  if (baseData.type === 'softscope-autobench' || currData.type === 'softscope-autobench') {
+    const compareDelta = computeAutoBenchDelta(baseData, currData, { threshold });
+
+    if (options.output) {
+      let fileContent;
+      if (options.ai || options.output.endsWith('.ai') || options.output.endsWith('.llm')) {
+        fileContent = renderAutoBenchCompareAiReport(compareDelta, options);
+      } else if (options.md || options.output.endsWith('.md')) {
+        fileContent = renderAutoBenchCompareMarkdownReport(compareDelta, options);
+      } else {
+        fileContent = renderAutoBenchCompareJsonReport(compareDelta);
+      }
+
+      try {
+        fs.writeFileSync(options.output, fileContent, 'utf-8');
+      } catch (err) {
+        console.error(`[softscope] Failed to write report to ${options.output}: ${err.message}`);
+      }
+    }
+
+    if (options.json) {
+      process.stdout.write(renderAutoBenchCompareJsonReport(compareDelta) + '\n');
+    } else if (options.ai) {
+      process.stdout.write('\n' + renderAutoBenchCompareAiReport(compareDelta, options) + '\n');
+    } else if (options.md) {
+      process.stdout.write('\n' + renderAutoBenchCompareMarkdownReport(compareDelta, options) + '\n');
+    } else {
+      process.stdout.write('\n' + renderAutoBenchCompareTerminalReport(compareDelta, options) + '\n');
+    }
+
+    if (options.failOnRegression != null && compareDelta.thresholdBreached) {
+      return 1;
+    }
+    return 0;
+  }
+
   const compareDelta = computeDelta(baseData, currData, {
     projectRoot: options.projectRoot,
     threshold
@@ -531,11 +585,16 @@ Usage:
   softscope <command> [...args]
   softscope compare <baseline.json> <current.json>
   softscope auto-bench <file> [options]
+  softscope pin <target>
+  softscope diff [target]
 
 Examples:
   softscope app.js
   softscope bench/run.js
-  softscope auto-bench src/math.js
+  softscope pin bench/run.js
+  softscope diff bench/run.js
+  softscope auto-bench src/math.js --pin
+  softscope auto-bench src/math.js --diff
   softscope auto-bench src/math.js --filter compute
   softscope auto-bench src/math.js --watch
   softscope auto-bench src/math.js --pick
@@ -551,6 +610,8 @@ Examples:
   softscope -o report.md app.js
 
 Options:
+  --pin                    Pin current execution profile to .softscope/last-pin.json
+  --diff                   Compare current execution against pinned baseline (.softscope/last-pin.json)
   --watch, -w              Watch target file and directory for changes and automatically re-run
   --pick, -i               Interactively select functions to benchmark from terminal checklist
   --filter <pattern>       Filter functions to benchmark by name or glob (aliases: --fn, --match)
