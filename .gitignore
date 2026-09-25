@@ -20,6 +20,7 @@ scratch/
 seeds.json
 *.baseline.json
 baseline.json
+.softscope/
 
 # Environment & local configs
 .env
