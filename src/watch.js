@@ -107,6 +107,10 @@ export function setupWatchKeyboard({
   onRerun,
   onQuit,
   onPick,
+  onToggleFuzz,
+  onToggleDiff,
+  onToggleChanged,
+  onToggleAll,
   stdin = process.stdin,
   stdout = process.stdout
 }) {
@@ -141,6 +145,26 @@ export function setupWatchKeyboard({
       if (onPick) onPick();
       return;
     }
+
+    if (key.name === 'f') {
+      if (onToggleFuzz) onToggleFuzz();
+      return;
+    }
+
+    if (key.name === 'd') {
+      if (onToggleDiff) onToggleDiff();
+      return;
+    }
+
+    if (key.name === 'c') {
+      if (onToggleChanged) onToggleChanged();
+      return;
+    }
+
+    if (key.name === 'a') {
+      if (onToggleAll) onToggleAll();
+      return;
+    }
   };
 
   stdin.on('keypress', handleKey);
@@ -161,7 +185,14 @@ export async function runWatchLoop({
   targetPath,
   watchPaths = [],
   runTask,
-  onPick = null
+  onPick = null,
+  onToggleFuzz = null,
+  onToggleDiff = null,
+  onToggleChanged = null,
+  onToggleAll = null,
+  getState = null,
+  stdin = process.stdin,
+  stdout = process.stdout
 }) {
   let isRunning = false;
   let rerunQueued = false;
@@ -169,9 +200,32 @@ export async function runWatchLoop({
   let watcher = null;
 
   function printFooter() {
-    const pickHint = onPick ? ', p: pick functions' : '';
-    process.stdout.write(
-      `\n\x1b[90m[${title}] Watching for changes in ${path.relative(process.cwd(), targetPath) || targetPath}... (r: re-run${pickHint}, q: quit)\x1b[0m\n`
+    const state = typeof getState === 'function' ? getState() : {};
+    const shortcuts = [];
+    shortcuts.push('\x1b[1mr\x1b[0m: re-run');
+    if (onPick) shortcuts.push('\x1b[1mp\x1b[0m: pick');
+    if (onToggleFuzz) {
+      const status = state.fuzz !== false ? '\x1b[32mON\x1b[0m' : '\x1b[90mOFF\x1b[0m';
+      shortcuts.push(`\x1b[1mf\x1b[0m: fuzz (${status})`);
+    }
+    if (onToggleDiff) {
+      const status = state.diff ? '\x1b[32mON\x1b[0m' : '\x1b[90mOFF\x1b[0m';
+      shortcuts.push(`\x1b[1md\x1b[0m: diff (${status})`);
+    }
+    if (onToggleChanged) {
+      const status = state.changed ? '\x1b[32mON\x1b[0m' : '\x1b[90mOFF\x1b[0m';
+      shortcuts.push(`\x1b[1mc\x1b[0m: changed (${status})`);
+    }
+    if (onToggleAll) {
+      const status = state.all ? '\x1b[32mON\x1b[0m' : '\x1b[90mOFF\x1b[0m';
+      shortcuts.push(`\x1b[1ma\x1b[0m: all (${status})`);
+    }
+    shortcuts.push('\x1b[1mq\x1b[0m: quit');
+
+    const relTarget = path.relative(process.cwd(), targetPath) || targetPath;
+    stdout.write(
+      `\n\x1b[90m[${title}] Watching for changes in ${relTarget}...\x1b[0m\n` +
+      `\x1b[90mShortcuts: ${shortcuts.join('  ')}\x1b[0m\n`
     );
   }
 
@@ -184,9 +238,9 @@ export async function runWatchLoop({
     isRunning = true;
     rerunQueued = false;
 
-    clearTerminal();
+    clearTerminal(stdout);
     if (reason) {
-      process.stdout.write(`\x1b[36m[${title}]\x1b[0m ${reason}\n\n`);
+      stdout.write(`\x1b[36m[${title}]\x1b[0m ${reason}\n\n`);
     }
 
     try {
@@ -208,13 +262,37 @@ export async function runWatchLoop({
     function quit() {
       if (watcher) watcher.close();
       if (cleanupKeyboard) cleanupKeyboard();
-      clearTerminal();
-      process.stdout.write(`\x1b[90m[${title}] Watch mode stopped.\x1b[0m\n`);
+      clearTerminal(stdout);
+      stdout.write(`\x1b[90m[${title}] Watch mode stopped.\x1b[0m\n`);
       resolve(0);
     }
 
     function rerun() {
       execute('Manual re-run requested.');
+    }
+
+    async function toggleFuzz() {
+      if (!onToggleFuzz) return;
+      const msg = await onToggleFuzz();
+      execute(msg || 'Toggled fuzzing mode.');
+    }
+
+    async function toggleDiff() {
+      if (!onToggleDiff) return;
+      const msg = await onToggleDiff();
+      execute(msg || 'Toggled diff comparison mode.');
+    }
+
+    async function toggleChanged() {
+      if (!onToggleChanged) return;
+      const msg = await onToggleChanged();
+      execute(msg || 'Toggled Git-aware filter.');
+    }
+
+    async function toggleAll() {
+      if (!onToggleAll) return;
+      const msg = await onToggleAll();
+      execute(msg || 'Toggled all functions filter.');
     }
 
     async function pick() {
@@ -226,12 +304,26 @@ export async function runWatchLoop({
       try {
         await onPick();
       } finally {
-        cleanupKeyboard = setupWatchKeyboard({ onRerun: rerun, onQuit: quit, onPick: pick });
+        cleanupKeyboard = initKeyboard();
         execute('Updated function selection.');
       }
     }
 
-    cleanupKeyboard = setupWatchKeyboard({ onRerun: rerun, onQuit: quit, onPick: onPick ? pick : null });
+    function initKeyboard() {
+      return setupWatchKeyboard({
+        onRerun: rerun,
+        onQuit: quit,
+        onPick: onPick ? pick : null,
+        onToggleFuzz: onToggleFuzz ? toggleFuzz : null,
+        onToggleDiff: onToggleDiff ? toggleDiff : null,
+        onToggleChanged: onToggleChanged ? toggleChanged : null,
+        onToggleAll: onToggleAll ? toggleAll : null,
+        stdin,
+        stdout
+      });
+    }
+
+    cleanupKeyboard = initKeyboard();
 
     watcher = createFileWatcher({
       watchPaths,

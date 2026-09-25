@@ -61,7 +61,29 @@ export async function runCommand(options) {
       title: 'softscope',
       targetPath: watchTarget,
       watchPaths,
-      runTask: () => runCommandSingle(singleOpts)
+      runTask: () => runCommandSingle(singleOpts),
+      getState: () => ({
+        diff: Boolean(singleOpts.diff),
+        changed: Boolean(singleOpts.changed)
+      }),
+      onToggleDiff: () => {
+        if (!singleOpts.diff) {
+          singleOpts.diff = true;
+          singleOpts.compare = path.resolve(options.projectRoot, '.softscope/last-pin.json');
+          if (!fs.existsSync(singleOpts.compare)) {
+            singleOpts.saveBaseline = singleOpts.compare;
+          }
+          return `Toggled baseline diff: \x1b[32mON\x1b[0m (comparing against .softscope/last-pin.json)`;
+        } else {
+          singleOpts.diff = false;
+          singleOpts.compare = null;
+          return `Toggled baseline diff: \x1b[33mOFF\x1b[0m`;
+        }
+      },
+      onToggleChanged: () => {
+        singleOpts.changed = !singleOpts.changed;
+        return `Toggled Git-aware filter: ${singleOpts.changed ? '\x1b[32mON\x1b[0m' : '\x1b[33mOFF\x1b[0m'}`;
+      }
     });
   }
 

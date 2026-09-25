@@ -5,8 +5,9 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { EventEmitter } from 'node:events';
 import { parseCliArgs } from '../src/config.js';
-import { isWatchIgnored, createFileWatcher } from '../src/watch.js';
+import { isWatchIgnored, createFileWatcher, setupWatchKeyboard, runWatchLoop } from '../src/watch.js';
 import { promptFunctionPicker } from '../src/picker.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -160,4 +161,162 @@ test('CLI: auto-bench --watch detects file change and re-runs', async () => {
     } catch {}
   }
 });
+
+test('Watch Keyboard: setupWatchKeyboard correctly triggers callbacks for r, p, f, d, c, a, q and ctrl+c', () => {
+  const mockStdin = new EventEmitter();
+  mockStdin.isTTY = true;
+  mockStdin.setRawMode = () => {};
+  mockStdin.resume = () => {};
+  mockStdin.pause = () => {};
+
+  const events = [];
+
+  const cleanup = setupWatchKeyboard({
+    onRerun: () => events.push('rerun'),
+    onQuit: () => events.push('quit'),
+    onPick: () => events.push('pick'),
+    onToggleFuzz: () => events.push('fuzz'),
+    onToggleDiff: () => events.push('diff'),
+    onToggleChanged: () => events.push('changed'),
+    onToggleAll: () => events.push('all'),
+    stdin: mockStdin
+  });
+
+  mockStdin.emit('keypress', 'r', { name: 'r' });
+  mockStdin.emit('keypress', 'p', { name: 'p' });
+  mockStdin.emit('keypress', 'f', { name: 'f' });
+  mockStdin.emit('keypress', 'd', { name: 'd' });
+  mockStdin.emit('keypress', 'c', { name: 'c' });
+  mockStdin.emit('keypress', 'a', { name: 'a' });
+  mockStdin.emit('keypress', 'q', { name: 'q' });
+
+  assert.deepEqual(events, ['rerun', 'pick', 'fuzz', 'diff', 'changed', 'all', 'quit']);
+
+  // Test Ctrl+C triggers onQuit
+  const mockStdinCtrl = new EventEmitter();
+  mockStdinCtrl.isTTY = true;
+  mockStdinCtrl.setRawMode = () => {};
+  mockStdinCtrl.resume = () => {};
+  mockStdinCtrl.pause = () => {};
+
+  let ctrlQuit = false;
+  setupWatchKeyboard({
+    onQuit: () => { ctrlQuit = true; },
+    stdin: mockStdinCtrl
+  });
+  mockStdinCtrl.emit('keypress', '\x03', { name: 'c', ctrl: true });
+  assert.equal(ctrlQuit, true);
+
+  // After cleanup, events should not fire
+  cleanup();
+  mockStdin.emit('keypress', 'r', { name: 'r' });
+  assert.equal(events.length, 7);
+});
+
+test('Watch Loop: interactive hotkeys toggle state, trigger re-runs, and render live shortcut bar', async () => {
+  const tmpDir = path.join(os.tmpdir(), `softscope-hotkey-loop-${Date.now()}`);
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const testFile = path.join(tmpDir, 'test.js');
+  fs.writeFileSync(testFile, 'export function sample() {}');
+  await new Promise(r => setTimeout(r, 200));
+
+  const mockStdin = new EventEmitter();
+  mockStdin.isTTY = true;
+  mockStdin.setRawMode = () => {};
+  mockStdin.resume = () => {};
+  mockStdin.pause = () => {};
+
+  let output = '';
+  const mockStdout = {
+    isTTY: true,
+    write: (chunk) => {
+      output += String(chunk);
+    }
+  };
+
+  const strip = s => s.replace(/\x1b\[[0-9;]*m/g, '');
+
+  const state = {
+    fuzz: true,
+    diff: false,
+    changed: false,
+    all: false
+  };
+
+  let runCount = 0;
+
+  try {
+    const loopPromise = runWatchLoop({
+      title: 'auto-bench',
+      targetPath: testFile,
+      watchPaths: [testFile],
+      runTask: async () => {
+        runCount++;
+      },
+      getState: () => state,
+      onToggleFuzz: () => {
+        state.fuzz = !state.fuzz;
+        return `Toggled fuzzing: ${state.fuzz ? 'ON' : 'OFF'}`;
+      },
+      onToggleDiff: () => {
+        state.diff = !state.diff;
+        return `Toggled diff: ${state.diff ? 'ON' : 'OFF'}`;
+      },
+      onToggleChanged: () => {
+        state.changed = !state.changed;
+        return `Toggled changed: ${state.changed ? 'ON' : 'OFF'}`;
+      },
+      onToggleAll: () => {
+        state.all = !state.all;
+        return `Toggled all: ${state.all ? 'ON' : 'OFF'}`;
+      },
+      onPick: async () => {},
+      stdin: mockStdin,
+      stdout: mockStdout
+    });
+
+    // Wait for initial run
+    await new Promise(r => setTimeout(r, 100));
+    assert.equal(runCount, 1);
+    assert.ok(strip(output).includes('Shortcuts:'));
+    assert.ok(strip(output).includes('fuzz (ON)'));
+    assert.ok(strip(output).includes('diff (OFF)'));
+
+    // Press 'f' -> toggles fuzzing to OFF
+    output = '';
+    mockStdin.emit('keypress', 'f', { name: 'f' });
+    await new Promise(r => setTimeout(r, 100));
+    assert.equal(runCount, 2);
+    assert.equal(state.fuzz, false);
+    assert.ok(strip(output).includes('fuzz (OFF)'));
+
+    // Press 'd' -> toggles diff to ON
+    output = '';
+    mockStdin.emit('keypress', 'd', { name: 'd' });
+    await new Promise(r => setTimeout(r, 100));
+    assert.equal(runCount, 3);
+    assert.equal(state.diff, true);
+    assert.ok(strip(output).includes('diff (ON)'));
+
+    // Press 'c' -> toggles changed to ON
+    output = '';
+    mockStdin.emit('keypress', 'c', { name: 'c' });
+    await new Promise(r => setTimeout(r, 100));
+    assert.equal(runCount, 4);
+    assert.equal(state.changed, true);
+    assert.ok(strip(output).includes('changed (ON)'));
+
+    // Press 'q' -> quits cleanly
+    mockStdin.emit('keypress', 'q', { name: 'q' });
+    const exitCode = await loopPromise;
+    assert.equal(exitCode, 0);
+    assert.ok(output.includes('Watch mode stopped'));
+  } finally {
+    try {
+      mockStdin.emit('keypress', 'q', { name: 'q' });
+    } catch {}
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 

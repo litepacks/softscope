@@ -723,6 +723,38 @@ export async function runAutoBench(options) {
       runTask: async () => {
         return executeAutoBenchSingle(targetFile, options, pickedFunctions);
       },
+      getState: () => ({
+        fuzz: options.fuzz !== false,
+        diff: Boolean(options.diff),
+        changed: Boolean(options.changed),
+        all: Boolean(options.all)
+      }),
+      onToggleFuzz: () => {
+        options.fuzz = options.fuzz === false ? true : false;
+        return `Toggled fuzzing: ${options.fuzz ? '\x1b[32mON\x1b[0m (edge-case & boundary testing)' : '\x1b[33mOFF\x1b[0m (pure throughput mode)'}`;
+      },
+      onToggleDiff: () => {
+        if (!options.diff) {
+          options.diff = true;
+          options.compare = path.resolve(options.projectRoot || process.cwd(), '.softscope/last-pin.json');
+          if (!fs.existsSync(options.compare)) {
+            options.saveBaseline = options.compare;
+          }
+          return `Toggled baseline diff: \x1b[32mON\x1b[0m (comparing against .softscope/last-pin.json)`;
+        } else {
+          options.diff = false;
+          options.compare = null;
+          return `Toggled baseline diff: \x1b[33mOFF\x1b[0m`;
+        }
+      },
+      onToggleChanged: () => {
+        options.changed = !options.changed;
+        return `Toggled Git-aware filter: ${options.changed ? '\x1b[32mON\x1b[0m (only modified functions)' : '\x1b[33mOFF\x1b[0m (all target functions)'}`;
+      },
+      onToggleAll: () => {
+        options.all = !options.all;
+        return `Toggled all functions: ${options.all ? '\x1b[32mON\x1b[0m (including unexported functions)' : '\x1b[33mOFF\x1b[0m (exported only)'}`;
+      },
       onPick: process.stdin.isTTY ? async () => {
         try {
           const freshAnalysis = analyzeModule(targetFile, { all: Boolean(options.all) });
