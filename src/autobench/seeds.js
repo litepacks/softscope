@@ -33,25 +33,91 @@ export function loadSeedsFile(filePath) {
 }
 
 /**
+ * Synthesizes a realistic concrete value matching a structured TypeShape descriptor.
+ */
+export function inferShapeValue(shape, depth = 0) {
+  if (!shape || depth > 5) return {};
+
+  switch (shape.kind) {
+    case 'primitive': {
+      switch (shape.primitive) {
+        case 'number': return 10;
+        case 'string': return 'benchmark';
+        case 'boolean': return true;
+        case 'bigint': return 10n;
+        case 'null': return null;
+        case 'undefined': return undefined;
+        default: return 'benchmark';
+      }
+    }
+
+    case 'literal': {
+      return shape.value;
+    }
+
+    case 'union': {
+      if (shape.values && shape.values.length > 0) {
+        return shape.values[0];
+      }
+      if (shape.types && shape.types.length > 0) {
+        return inferShapeValue(shape.types[0], depth + 1);
+      }
+      return 'benchmark';
+    }
+
+    case 'array': {
+      const elem = inferShapeValue(shape.elementType, depth + 1);
+      return [elem];
+    }
+
+    case 'function': {
+      return () => {};
+    }
+
+    case 'object': {
+      if (shape.isRecord) {
+        const val = inferShapeValue(shape.valueType, depth + 1);
+        return { key1: val, key2: val };
+      }
+      const obj = {};
+      for (const prop of shape.properties || []) {
+        obj[prop.name] = inferShapeValue(prop.type, depth + 1);
+      }
+      return obj;
+    }
+
+    default:
+      return {};
+  }
+}
+
+/**
  * Infers a single baseline value from parameter metadata.
  */
-function inferParamValue(param) {
+export function inferParamValue(param) {
   if (param.hasDefault && param.defaultValue !== undefined) {
     return param.defaultValue;
   }
 
   if (param.tsType) {
-    switch (param.tsType) {
-      case 'number':
-        return 10;
-      case 'string':
-        return 'benchmark';
-      case 'boolean':
-        return true;
-      case 'array':
-        return [1, 2, 3];
-      case 'object':
-        return { id: 1, name: 'test' };
+    if (typeof param.tsType === 'string') {
+      switch (param.tsType) {
+        case 'number':
+          return 10;
+        case 'string':
+          return 'benchmark';
+        case 'boolean':
+          return true;
+        case 'array':
+          return [1, 2, 3];
+        case 'object':
+          return { id: 1, name: 'test' };
+      }
+    } else if (typeof param.tsType === 'object') {
+      const synthesized = inferShapeValue(param.tsType);
+      if (synthesized !== undefined) {
+        return synthesized;
+      }
     }
   }
 
@@ -59,7 +125,7 @@ function inferParamValue(param) {
   if (/num|count|idx|index|len|size|max|min|limit|offset|a|b|x|y|amount|sum|val/i.test(name)) {
     return 10;
   }
-  if (/str|text|name|key|word|query|msg|message|title/i.test(name)) {
+  if (/str|text|name|key|word|query|msg|message|title|sql/i.test(name)) {
     return 'benchmark';
   }
   if (/arr|list|items|elements|data|rows/i.test(name)) {
@@ -81,7 +147,7 @@ function inferParamValue(param) {
 /**
  * Produces perturbed edge-case values for a single argument.
  */
-function generateMutations(val) {
+export function generateMutations(val) {
   if (typeof val === 'number') {
     return [
       { label: 'zero (0)', val: 0 },
@@ -138,6 +204,142 @@ function generateMutations(val) {
 }
 
 /**
+ * Generates perturbations for an object based on its TypeShape properties.
+ */
+export function generateShapeMutations(baseVal, shape) {
+  const mutations = [];
+
+  // Base mutations for any object
+  mutations.push({ label: 'empty object ({})', val: {} });
+  mutations.push({ label: 'null object', val: null });
+  mutations.push({ label: 'undefined object', val: undefined });
+
+  if (!shape.properties || shape.properties.length === 0) {
+    return mutations;
+  }
+
+  for (const prop of shape.properties) {
+    const propName = prop.name;
+    const propType = prop.type;
+
+    // 1. Omit property
+    if (baseVal && typeof baseVal === 'object' && propName in baseVal) {
+      const omitted = { ...baseVal };
+      delete omitted[propName];
+      mutations.push({
+        label: `omitted ${propName}`,
+        val: omitted
+      });
+    }
+
+    // 2. If property is a union (e.g. dialect: 'postgres' | 'mysql' | 'sqlite')
+    if (propType && propType.kind === 'union' && propType.values && propType.values.length > 0) {
+      for (const alt of propType.values) {
+        if (!baseVal || baseVal[propName] !== alt) {
+          mutations.push({
+            label: `variant ${propName}='${alt}'`,
+            val: { ...(baseVal || {}), [propName]: alt }
+          });
+        }
+      }
+      mutations.push({
+        label: `invalid ${propName}='__invalid__'`,
+        val: { ...(baseVal || {}), [propName]: '__invalid__' }
+      });
+    }
+
+    // 3. If property is boolean
+    if (propType && propType.kind === 'primitive' && propType.primitive === 'boolean') {
+      const current = baseVal ? Boolean(baseVal[propName]) : true;
+      mutations.push({
+        label: `toggle ${propName}=${!current}`,
+        val: { ...(baseVal || {}), [propName]: !current }
+      });
+    }
+
+    // 4. If property is number
+    if (propType && propType.kind === 'primitive' && propType.primitive === 'number') {
+      mutations.push({
+        label: `boundary ${propName}=0`,
+        val: { ...(baseVal || {}), [propName]: 0 }
+      });
+      mutations.push({
+        label: `boundary ${propName}=-1`,
+        val: { ...(baseVal || {}), [propName]: -1 }
+      });
+    }
+
+    // 5. If property is array
+    if (propType && propType.kind === 'array') {
+      mutations.push({
+        label: `empty array ${propName}=[]`,
+        val: { ...(baseVal || {}), [propName]: [] }
+      });
+    }
+
+    // 6. If property is string (and not union)
+    if (propType && propType.kind === 'primitive' && propType.primitive === 'string') {
+      mutations.push({
+        label: `empty string ${propName}=""`,
+        val: { ...(baseVal || {}), [propName]: '' }
+      });
+    }
+  }
+
+  return mutations;
+}
+
+export function generateUnionMutations(baseVal, shape) {
+  const mutations = [];
+  if (shape.values && shape.values.length > 0) {
+    for (const alt of shape.values) {
+      if (alt !== baseVal) {
+        mutations.push({ label: `union variant '${alt}'`, val: alt });
+      }
+    }
+    mutations.push({ label: 'invalid union member', val: '__invalid_variant__' });
+  } else if (shape.types && shape.types.length > 0) {
+    for (const t of shape.types) {
+      const val = inferShapeValue(t);
+      if (val !== baseVal) {
+        mutations.push({ label: 'union type variant', val });
+      }
+    }
+  }
+  mutations.push({ label: 'null', val: null });
+  mutations.push({ label: 'undefined', val: undefined });
+  return mutations;
+}
+
+export function generateArrayMutations(baseVal, shape) {
+  const elem = inferShapeValue(shape.elementType);
+  return [
+    { label: 'empty array ([])', val: [] },
+    { label: 'single element ([item])', val: [elem] },
+    { label: 'multiple elements ([...])', val: [elem, elem, elem] },
+    { label: 'null as array', val: null },
+    { label: 'undefined as array', val: undefined }
+  ];
+}
+
+export function generateParamMutations(baseVal, param) {
+  if (param && param.tsType && typeof param.tsType === 'object') {
+    const shape = param.tsType;
+    if (shape.kind === 'object') {
+      return generateShapeMutations(baseVal, shape);
+    }
+    if (shape.kind === 'union') {
+      return generateUnionMutations(baseVal, shape);
+    }
+    if (shape.kind === 'array') {
+      return generateArrayMutations(baseVal, shape);
+    }
+  }
+
+  return generateMutations(baseVal);
+}
+
+/**
  * Resolves baseline seeds and generates edge-case mutations for a candidate function.
  */
 export function synthesizeSeeds(fnInfo, seedsMap = new Map(), options = {}) {
@@ -152,8 +354,8 @@ export function synthesizeSeeds(fnInfo, seedsMap = new Map(), options = {}) {
   }
 
   // 2. Synthesize baseline from AST parameters if not captured
+  const params = fnInfo.params || [];
   if (!baselineSeed) {
-    const params = fnInfo.params || [];
     baselineSeed = params.map(inferParamValue);
   }
 
@@ -162,7 +364,8 @@ export function synthesizeSeeds(fnInfo, seedsMap = new Map(), options = {}) {
   if (fuzz && baselineSeed.length > 0) {
     for (let argIdx = 0; argIdx < baselineSeed.length; argIdx++) {
       const originalVal = baselineSeed[argIdx];
-      const mutations = generateMutations(originalVal);
+      const param = fnInfo.params ? fnInfo.params[argIdx] : null;
+      const mutations = generateParamMutations(originalVal, param);
 
       for (const mut of mutations) {
         const mutatedArgs = [...baselineSeed];

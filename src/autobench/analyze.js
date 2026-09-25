@@ -1,8 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseSource, createSourceLocator } from '../instrument/parse.js';
+import { collectTypeDefinitions, resolveTsTypeNode, resolveModuleFile } from './types.js';
 
-function extractParamInfo(paramNode) {
+export { resolveModuleFile };
+
+function extractParamInfo(paramNode, typeRegistry = new Map()) {
   if (!paramNode) return { name: 'arg', hasDefault: false };
 
   let name = 'arg';
@@ -13,14 +16,14 @@ function extractParamInfo(paramNode) {
   if (paramNode.type === 'Identifier') {
     name = paramNode.name;
     if (paramNode.typeAnnotation && paramNode.typeAnnotation.typeAnnotation) {
-      tsType = resolveTsType(paramNode.typeAnnotation.typeAnnotation);
+      tsType = resolveTsTypeNode(paramNode.typeAnnotation.typeAnnotation, typeRegistry);
     }
   } else if (paramNode.type === 'AssignmentPattern') {
     hasDefault = true;
     if (paramNode.left && paramNode.left.type === 'Identifier') {
       name = paramNode.left.name;
       if (paramNode.left.typeAnnotation && paramNode.left.typeAnnotation.typeAnnotation) {
-        tsType = resolveTsType(paramNode.left.typeAnnotation.typeAnnotation);
+        tsType = resolveTsTypeNode(paramNode.left.typeAnnotation.typeAnnotation, typeRegistry);
       }
     }
     if (paramNode.right) {
@@ -48,74 +51,7 @@ function extractParamInfo(paramNode) {
   return { name, hasDefault, defaultValue, tsType };
 }
 
-function resolveTsType(typeNode) {
-  if (!typeNode) return null;
-  switch (typeNode.type) {
-    case 'TSNumberKeyword':
-      return 'number';
-    case 'TSStringKeyword':
-      return 'string';
-    case 'TSBooleanKeyword':
-      return 'boolean';
-    case 'TSArrayType':
-      return 'array';
-    case 'TSTypeLiteral':
-      return 'object';
-    default:
-      return null;
-  }
-}
-
-/**
- * Resolves a module specifier to an existing file path on disk.
- * Handles TypeScript extension mapping (.js -> .ts/.tsx) and barrel directory indexes.
- */
-export function resolveModuleFile(baseDir, specifier) {
-  if (!specifier || !specifier.startsWith('.')) {
-    return null;
-  }
-
-  const directPath = path.resolve(baseDir, specifier);
-
-  // 1. Exact file match
-  if (fs.existsSync(directPath) && fs.statSync(directPath).isFile()) {
-    return directPath;
-  }
-
-  // 2. Map .js / .mjs / .cjs to TypeScript source equivalents (.ts / .tsx / .mts / .cts)
-  const ext = path.extname(specifier);
-  if (ext === '.js' || ext === '.mjs' || ext === '.cjs') {
-    const withoutExt = directPath.slice(0, -ext.length);
-    for (const tsExt of ['.ts', '.tsx', '.mts', '.cts']) {
-      const candidate = withoutExt + tsExt;
-      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-        return candidate;
-      }
-    }
-  }
-
-  // 3. Try appending extensions if none provided
-  for (const candidateExt of ['.ts', '.tsx', '.js', '.mjs', '.jsx']) {
-    const candidate = directPath + candidateExt;
-    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-      return candidate;
-    }
-  }
-
-  // 4. Directory index resolution (e.g. ./io -> ./io/index.ts)
-  if (fs.existsSync(directPath) && fs.statSync(directPath).isDirectory()) {
-    for (const indexName of ['index.ts', 'index.tsx', 'index.js', 'index.mjs']) {
-      const candidate = path.join(directPath, indexName);
-      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-        return candidate;
-      }
-    }
-  }
-
-  return null;
-}
-
-function analyzeModuleInternal(resolved, options = {}, visited = new Set()) {
+function analyzeModuleInternal(resolved, options = {}, visited = new Set(), typeRegistry = new Map()) {
   if (visited.has(resolved) || !fs.existsSync(resolved)) {
     return [];
   }
@@ -139,6 +75,8 @@ function analyzeModuleInternal(resolved, options = {}, visited = new Set()) {
   if (!ast || !ast.body) {
     return [];
   }
+
+  const typeDefinitions = collectTypeDefinitions(ast, resolved, typeRegistry);
 
   const locator = createSourceLocator(code);
 
@@ -194,7 +132,7 @@ function analyzeModuleInternal(resolved, options = {}, visited = new Set()) {
         // Re-export: export { a, b as c } from './foo.js'
         const subFile = resolveModuleFile(fileDir, node.source.value);
         if (subFile) {
-          const subFns = analyzeModuleInternal(subFile, options, visited);
+          const subFns = analyzeModuleInternal(subFile, options, visited, typeRegistry);
           for (const spec of node.specifiers || []) {
             if (spec.type === 'ExportSpecifier' && spec.local && spec.exported) {
               const localName = spec.local.name;
@@ -223,7 +161,7 @@ function analyzeModuleInternal(resolved, options = {}, visited = new Set()) {
     else if (node.type === 'ExportAllDeclaration' && node.source && node.source.value) {
       const subFile = resolveModuleFile(fileDir, node.source.value);
       if (subFile) {
-        const subFns = analyzeModuleInternal(subFile, options, visited);
+        const subFns = analyzeModuleInternal(subFile, options, visited, typeRegistry);
         for (const f of subFns) {
           reExportedFunctions.push({ ...f });
         }
@@ -372,7 +310,7 @@ function analyzeModuleInternal(resolved, options = {}, visited = new Set()) {
     const fnNode = item.node;
     if (fnNode.generator) continue; // Skip generators
 
-    const params = (fnNode.params || []).map(extractParamInfo);
+    const params = (fnNode.params || []).map(p => extractParamInfo(p, typeDefinitions));
 
     const startLoc = locator(fnNode.start);
     const endLoc = locator(fnNode.end);
@@ -411,10 +349,12 @@ export function analyzeModule(filePath, options = {}) {
     throw new Error(`Target file not found: ${resolved}`);
   }
 
-  const functions = analyzeModuleInternal(resolved, options, new Set());
+  const typeRegistry = new Map();
+  const functions = analyzeModuleInternal(resolved, options, new Set(), typeRegistry);
 
   return {
     filePath: resolved,
-    functions
+    functions,
+    types: typeRegistry
   };
 }
