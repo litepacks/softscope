@@ -69,6 +69,9 @@ export function parseCliArgs(rawArgs, cwd = process.cwd()) {
     crashes: rcConfig.crashes ? path.resolve(cwd, rcConfig.crashes) : null,
     testSuite: false,
     clear: false,
+    changed: Boolean(rcConfig.changed),
+    staged: Boolean(rcConfig.staged),
+    since: rcConfig.since || null,
     command: []
   };
 
@@ -246,6 +249,21 @@ export function parseCliArgs(rawArgs, cwd = process.cwd()) {
       i++;
     } else if (arg === '--clear') {
       options.clear = true;
+      i++;
+    } else if (arg === '--changed' || arg === '-c') {
+      options.changed = true;
+      i++;
+    } else if (arg === '--staged') {
+      options.staged = true;
+      options.changed = true;
+      i++;
+    } else if (arg === '--since') {
+      options.since = rawArgs[i + 1] || null;
+      options.changed = true;
+      i += 2;
+    } else if (arg.startsWith('--since=')) {
+      options.since = arg.slice('--since='.length);
+      options.changed = true;
       i++;
     } else {
       command.push(arg);

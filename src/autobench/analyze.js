@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseSource } from '../instrument/parse.js';
+import { parseSource, createSourceLocator } from '../instrument/parse.js';
 
 function extractParamInfo(paramNode) {
   if (!paramNode) return { name: 'arg', hasDefault: false };
@@ -139,6 +139,8 @@ function analyzeModuleInternal(resolved, options = {}, visited = new Set()) {
   if (!ast || !ast.body) {
     return [];
   }
+
+  const locator = createSourceLocator(code);
 
   const exportMap = new Map(); // localName -> exportName
   let defaultExportName = null;
@@ -372,13 +374,19 @@ function analyzeModuleInternal(resolved, options = {}, visited = new Set()) {
 
     const params = (fnNode.params || []).map(extractParamInfo);
 
+    const startLoc = locator(fnNode.start);
+    const endLoc = locator(fnNode.end);
+
     result.push({
       name: item.name,
       exportName: item.exportName || item.name,
       async: Boolean(fnNode.async),
       isClass: Boolean(item.isClass),
       params,
-      line: fnNode.loc ? fnNode.loc.start.line : 1
+      line: startLoc.line,
+      column: startLoc.column,
+      endLine: endLoc.line,
+      endColumn: endLoc.column
     });
   }
 

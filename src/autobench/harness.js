@@ -24,6 +24,12 @@ import {
   renderAutoBenchCompareJsonReport
 } from './compare.js';
 import { recordDiscoveredCrashes } from './replay.js';
+import {
+  isGitRepository,
+  getGitChangedFiles,
+  getGitChangedLines,
+  filterFunctionsByChangedLines
+} from '../git.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -313,11 +319,43 @@ export async function executeAutoBenchSingle(targetFile, options, pickedFunction
     return 1;
   }
 
-  // Apply picked functions or filter
+  // Apply picked functions, git-changed filter, or explicit filter
   if (pickedFunctions && pickedFunctions.length > 0) {
     const pickedKeys = new Set(pickedFunctions.map(f => f.exportName || f.name));
     analysis.functions = analysis.functions.filter(f => pickedKeys.has(f.exportName || f.name));
-  } else if (options.filter) {
+  }
+
+  if (options.changed) {
+    const targetProjectRoot = findProjectRoot(targetFile, options.projectRoot);
+    if (!isGitRepository(targetProjectRoot)) {
+      console.warn(`[softscope] Target is not inside a Git repository.`);
+      return 1;
+    }
+
+    const changedLines = getGitChangedLines(targetFile, {
+      projectRoot: targetProjectRoot,
+      staged: options.staged,
+      since: options.since
+    });
+
+    if (changedLines !== null && changedLines.size === 0) {
+      console.log(`[softscope] ✔ No changes detected in ${path.relative(process.cwd(), targetFile)} since ${options.since || (options.staged ? 'staged' : 'last commit')}.`);
+      return 0;
+    }
+
+    const beforeCount = analysis.functions.length;
+    analysis.functions = filterFunctionsByChangedLines(analysis.functions, changedLines);
+
+    if (analysis.functions.length === 0) {
+      console.log(`[softscope] ✔ No functions modified in ${path.relative(process.cwd(), targetFile)} (Git changes affected non-function lines).`);
+      return 0;
+    }
+
+    const refLabel = options.since || (options.staged ? 'staged' : 'HEAD');
+    console.log(`[softscope] 🔀 Git-aware filter: Selected ${analysis.functions.length} of ${beforeCount} function(s) modified since ${refLabel}.`);
+  }
+
+  if (options.filter) {
     const pattern = options.filter.trim();
     const isGlob = pattern.includes('*') || pattern.includes('?') || pattern.includes('[');
     const matcher = isGlob ? picomatch(pattern, { nocase: true }) : null;
@@ -607,8 +645,46 @@ export async function runAutoBench(options) {
   }
   const args = options.command.slice(1);
   if (args.length === 0) {
+    if (options.changed) {
+      const projectRoot = options.projectRoot || process.cwd();
+      if (!isGitRepository(projectRoot)) {
+        console.error('[softscope] Error: --changed requires a Git repository.');
+        return 1;
+      }
+
+      const changedFiles = getGitChangedFiles({
+        projectRoot,
+        staged: options.staged,
+        since: options.since
+      });
+
+      const refLabel = options.since || (options.staged ? 'staged' : 'HEAD');
+      if (changedFiles.length === 0) {
+        console.log(`[softscope] ✔ No changed code files detected in Git repository since ${refLabel}.`);
+        return 0;
+      }
+
+      if (changedFiles.length === 1) {
+        console.log(`[softscope] 🔀 Git-aware: auto-targeting changed file ${path.relative(process.cwd(), changedFiles[0])}`);
+        return executeAutoBenchSingle(changedFiles[0], options, null);
+      }
+
+      console.log(`[softscope] 🔀 Git-aware: detected ${changedFiles.length} changed code file(s):`);
+      for (const cf of changedFiles) {
+        console.log(`  • ${path.relative(process.cwd(), cf)}`);
+      }
+
+      let overallCode = 0;
+      for (const cf of changedFiles) {
+        console.log(`\n\x1b[1;36m▶ Auto-Bench: ${path.relative(process.cwd(), cf)}\x1b[0m`);
+        const code = await executeAutoBenchSingle(cf, options, null);
+        if (code !== 0) overallCode = code;
+      }
+      return overallCode;
+    }
+
     console.error('[softscope] Error: auto-bench requires a target file.');
-    console.error('Usage: softscope auto-bench <file> [options]');
+    console.error('Usage: softscope auto-bench <file> [options] (or softscope auto-bench --changed)');
     return 1;
   }
 

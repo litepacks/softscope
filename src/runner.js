@@ -604,6 +604,8 @@ Examples:
   softscope auto-bench src/math.js --pin
   softscope auto-bench src/math.js --diff
   softscope auto-bench src/math.js --filter compute
+  softscope auto-bench src/math.js --changed
+  softscope auto-bench --changed
   softscope auto-bench src/math.js --watch
   softscope auto-bench src/math.js --pick
   softscope auto-bench src/math.js --md
@@ -623,6 +625,9 @@ Options:
   --watch, -w              Watch target file and directory for changes and automatically re-run
   --pick, -i               Interactively select functions to benchmark from terminal checklist
   --filter <pattern>       Filter functions to benchmark by name or glob (aliases: --fn, --match)
+  --changed, -c            Only benchmark functions modified in Git working tree
+  --staged                 Only benchmark functions staged in Git index
+  --since <ref>            Compare Git modifications against specified revision (e.g. main, HEAD~1)
   --capture-seeds [file]   Record real function argument samples to seeds JSON file
   --no-capture             Disable automatic seed capture when running softscope test
   --seeds <file>           Use captured seeds for auto-benchmarking
