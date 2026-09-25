@@ -25,6 +25,29 @@ export function formatPercent(p) {
   return `${p.toFixed(1)}%`;
 }
 
+export function formatBytes(bytes) {
+  if (bytes === undefined || bytes === null || isNaN(bytes)) return '0 B';
+  const abs = Math.abs(bytes);
+  const sign = bytes < 0 ? '-' : '';
+  if (abs < 1024) return `${sign}${Math.round(abs)} B`;
+  if (abs < 1024 * 1024) return `${sign}${(abs / 1024).toFixed(1)} KB`;
+  return `${sign}${(abs / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function formatBytesPerOp(bytes) {
+  if (bytes === undefined || bytes === null || isNaN(bytes) || bytes === 0) return '0 B/op';
+  const abs = Math.abs(bytes);
+  const sign = bytes < 0 ? '-' : '';
+  if (abs < 1024) {
+    const formatted = abs < 10 && abs !== Math.round(abs) ? abs.toFixed(1) : Math.round(abs);
+    return `${sign}${formatted} B/op`;
+  }
+  if (abs < 1024 * 1024) {
+    return `${sign}${(abs / 1024).toFixed(1)} KB/op`;
+  }
+  return `${sign}${(abs / (1024 * 1024)).toFixed(1)} MB/op`;
+}
+
 function stripAnsi(str) {
   return String(str).replace(/\x1b\[[0-9;]*m/g, '');
 }

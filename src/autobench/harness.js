@@ -42,6 +42,21 @@ function generateRunnerScript(filePath, testCases, iterations = 10000, resultsPa
   return `
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { PerformanceObserver } from 'node:perf_hooks';
+import v8 from 'node:v8';
+
+function getHeapSpaceUsed() {
+  try {
+    const spaces = v8.getHeapSpaceStatistics();
+    let total = 0;
+    for (let i = 0; i < spaces.length; i++) {
+      total += spaces[i].space_used_size;
+    }
+    return total;
+  } catch {
+    return process.memoryUsage().heapUsed;
+  }
+}
 
 // Prevent console pollution, stdout interference, and premature process.exit during micro-benchmarking
 const noop = () => {};
@@ -148,7 +163,56 @@ async function run() {
       continue;
     }
 
-    // 2. Timed Measurement Loop
+    // 2. Measure Memory Allocations (B/op)
+    let bytesPerOp = 0;
+    try {
+      const allocBatch = isAsync ? Math.min(targetIterations, 100) : Math.min(targetIterations, 1000);
+      if (typeof globalThis.gc === 'function') {
+        globalThis.gc();
+        globalThis.gc();
+      }
+      const s0 = getHeapSpaceUsed();
+      const s1 = getHeapSpaceUsed();
+      const selfNoise = Math.max(0, s1 - s0);
+
+      if (typeof globalThis.gc === 'function') {
+        globalThis.gc();
+        globalThis.gc();
+      }
+      const h0 = getHeapSpaceUsed();
+      if (isAsync) {
+        for (let i = 0; i < allocBatch; i++) {
+          const p = callOrConstruct(fn, baselineSeed);
+          if (p && typeof p.then === 'function') await p;
+        }
+      } else {
+        for (let i = 0; i < allocBatch; i++) {
+          callOrConstruct(fn, baselineSeed);
+        }
+      }
+      const h1 = getHeapSpaceUsed();
+      const rawBytes = Math.max(0, h1 - h0);
+      const netBytes = Math.max(0, rawBytes - selfNoise);
+      const bOp = netBytes / allocBatch;
+      bytesPerOp = bOp <= 10 ? 0 : Math.round(bOp * 10) / 10;
+    } catch {
+      bytesPerOp = 0;
+    }
+
+    // 3. Timed Measurement Loop & GC Tracking
+    let gcCount = 0;
+    let gcTimeMs = 0;
+    let gcObs = null;
+    try {
+      gcObs = new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) {
+          gcCount++;
+          gcTimeMs += e.duration;
+        }
+      });
+      gcObs.observe({ entryTypes: ['gc'] });
+    } catch {}
+
     let iters = 0;
     const start = performance.now();
 
@@ -171,6 +235,14 @@ async function run() {
     }
 
     const totalTimeMs = performance.now() - start;
+
+    if (gcObs) {
+      try {
+        await new Promise(r => setTimeout(r, 5));
+        gcObs.disconnect();
+      } catch {}
+    }
+
     const avgMs = iters > 0 ? totalTimeMs / iters : 0;
     const opsPerSec = totalTimeMs > 0 ? Math.round((iters / totalTimeMs) * 1000) : 0;
 
@@ -234,6 +306,9 @@ async function run() {
       iterations: iters,
       totalTimeMs,
       opsPerSec,
+      bytesPerOp,
+      gcCount,
+      gcTimeMs: Number(gcTimeMs.toFixed(2)),
       avgMs,
       minMs,
       maxMs,
@@ -422,11 +497,15 @@ export async function executeAutoBenchSingle(targetFile, options, pickedFunction
 
   const existingNodeOptions = process.env.NODE_OPTIONS || '';
   const alreadyImported = existingNodeOptions.includes('register.js') || existingNodeOptions.includes(registerUrl);
-  const nodeOptions = alreadyImported
+  let nodeOptions = alreadyImported
     ? existingNodeOptions
     : existingNodeOptions
       ? `${existingNodeOptions} --import=${registerUrl}`
       : `--import=${registerUrl}`;
+
+  if (!nodeOptions.includes('--expose-gc')) {
+    nodeOptions = `--expose-gc ${nodeOptions}`.trim();
+  }
 
   const childEnv = {
     ...process.env,
@@ -530,13 +609,21 @@ export async function executeAutoBenchSingle(targetFile, options, pickedFunction
     }
   }
 
+  const callableFns = fnResults.filter(f => f.status === 'ok');
+  const totalGcs = callableFns.reduce((acc, f) => acc + (f.gcCount || 0), 0);
+  const avgAllocPerOp = callableFns.length > 0
+    ? callableFns.reduce((acc, f) => acc + (f.bytesPerOp || 0), 0) / callableFns.length
+    : 0;
+
   const results = {
     targetFile: path.relative(process.cwd(), targetFile),
     iterations,
     functions: fnResults,
     callEdges,
     totalCrashes: fnResults.reduce((acc, f) => acc + (f.crashes ? f.crashes.length : 0), 0),
-    totalCliffs: fnResults.reduce((acc, f) => acc + (f.cliffs ? f.cliffs.length : 0), 0)
+    totalCliffs: fnResults.reduce((acc, f) => acc + (f.cliffs ? f.cliffs.length : 0), 0),
+    totalGcCycles: totalGcs,
+    avgBytesPerOp: Math.round(avgAllocPerOp * 10) / 10
   };
 
   // Record crashes if any occurred for instant replay

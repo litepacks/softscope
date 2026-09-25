@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { formatDuration, formatNumber, formatPercent, renderTable } from '../report/format.js';
+import { formatDuration, formatNumber, formatPercent, formatBytesPerOp, renderTable } from '../report/format.js';
 
 const RED = '\x1b[31m';
 const GREEN = '\x1b[32m';
@@ -80,6 +80,11 @@ export function computeAutoBenchDelta(baselineData, currentData, options = {}) {
       const cliffsCurr = currFn.cliffs ? currFn.cliffs.length : 0;
       const cliffsDiff = cliffsCurr - cliffsBase;
 
+      const allocBase = baseFn.bytesPerOp != null ? baseFn.bytesPerOp : null;
+      const allocCurr = currFn.bytesPerOp != null ? currFn.bytesPerOp : null;
+      const allocDiff = (allocBase != null && allocCurr != null) ? allocCurr - allocBase : 0;
+      const allocPercent = (allocBase != null && allocBase > 0) ? (allocDiff / allocBase) * 100 : 0;
+
       // Status classification
       let status = 'unchanged';
       if (opsPercent <= -threshold || crashesDiff > 0 || cliffsDiff > 0) {
@@ -93,6 +98,7 @@ export function computeAutoBenchDelta(baselineData, currentData, options = {}) {
         status,
         base: {
           opsPerSec: opsBase,
+          bytesPerOp: allocBase != null ? allocBase : 0,
           avgMs: avgBaseMs,
           minMs: baseFn.minMs || 0,
           maxMs: maxBaseMs,
@@ -101,6 +107,7 @@ export function computeAutoBenchDelta(baselineData, currentData, options = {}) {
         },
         current: {
           opsPerSec: opsCurr,
+          bytesPerOp: allocCurr != null ? allocCurr : 0,
           avgMs: avgCurrMs,
           minMs: currFn.minMs || 0,
           maxMs: maxCurrMs,
@@ -110,6 +117,8 @@ export function computeAutoBenchDelta(baselineData, currentData, options = {}) {
         diff: {
           opsPerSec: opsDiff,
           opsPercent,
+          bytesPerOp: allocDiff,
+          bytesPerOpPercent: allocPercent,
           avgMs: avgDiffMs,
           avgPercent,
           maxMs: maxDiffMs,
@@ -153,6 +162,8 @@ export function computeAutoBenchDelta(baselineData, currentData, options = {}) {
       totalCliffsBase,
       totalCliffsCurr,
       totalCliffsDiff,
+      avgAllocBase: baselineData.avgBytesPerOp != null ? baselineData.avgBytesPerOp : 0,
+      avgAllocCurr: currentData.avgBytesPerOp != null ? currentData.avgBytesPerOp : 0,
       functionsCompared: comparisons.length
     },
     comparisons,
@@ -213,6 +224,7 @@ export function renderAutoBenchCompareTerminalReport(delta, options = {}) {
       { key: 'baseOps', label: 'Base Ops', align: 'right', minWidth: 11 },
       { key: 'currOps', label: 'Curr Ops', align: 'right', minWidth: 11 },
       { key: 'opsDelta', label: 'Ops Delta', align: 'right', minWidth: 11 },
+      { key: 'allocDelta', label: 'Alloc Delta', align: 'right', minWidth: 13 },
       { key: 'latDelta', label: 'Latency', align: 'right', minWidth: 9 },
       { key: 'status', label: 'Status', align: 'left', minWidth: 10 }
     ];
@@ -226,6 +238,13 @@ export function renderAutoBenchCompareTerminalReport(delta, options = {}) {
         opsDeltaStr = `${RED}${opsSign}${formatPercent(c.diff.opsPercent)} ⚠${RESET}`;
       } else {
         opsDeltaStr = `${DIM}${opsSign}${formatPercent(c.diff.opsPercent)}${RESET}`;
+      }
+
+      let allocDeltaStr = `${DIM}0 B/op${RESET}`;
+      if (c.diff.bytesPerOp < 0) {
+        allocDeltaStr = `${GREEN}${formatBytesPerOp(c.diff.bytesPerOp)} 🚀${RESET}`;
+      } else if (c.diff.bytesPerOp > 0) {
+        allocDeltaStr = `${RED}+${formatBytesPerOp(c.diff.bytesPerOp)} ⚠${RESET}`;
       }
 
       const latSign = c.diff.avgPercent >= 0 ? '+' : '';
@@ -258,6 +277,7 @@ export function renderAutoBenchCompareTerminalReport(delta, options = {}) {
         baseOps: formatNumber(c.base.opsPerSec) + '/s',
         currOps: formatNumber(c.current.opsPerSec) + '/s',
         opsDelta: opsDeltaStr,
+        allocDelta: allocDeltaStr,
         latDelta: latDeltaStr,
         status: statusStr
       };
@@ -309,12 +329,18 @@ export function renderAutoBenchCompareMarkdownReport(delta, options = {}) {
   lines.push(`**Unhandled Crashes:** ${overview.totalCrashesBase} ──▶ ${overview.totalCrashesCurr} | **Latency Cliffs:** ${overview.totalCliffsBase} ──▶ ${overview.totalCliffsCurr}`);
   lines.push('');
 
-  lines.push('| Function | Baseline Ops/s | Current Ops/s | Ops Delta | Latency Delta | Stability | Status |');
-  lines.push('| :--- | ---: | ---: | ---: | ---: | :--- | :--- |');
+  lines.push('| Function | Baseline Ops/s | Current Ops/s | Ops Delta | Alloc Delta | Latency Delta | Stability | Status |');
+  lines.push('| :--- | ---: | ---: | ---: | ---: | ---: | :--- | :--- |');
 
   for (const c of comparisons) {
     const opsSign = c.diff.opsPercent >= 0 ? '+' : '';
     const latSign = c.diff.avgPercent >= 0 ? '+' : '';
+    let allocDeltaStr = '0 B/op';
+    if (c.diff.bytesPerOp < 0) {
+      allocDeltaStr = `${formatBytesPerOp(c.diff.bytesPerOp)} 🚀`;
+    } else if (c.diff.bytesPerOp > 0) {
+      allocDeltaStr = `+${formatBytesPerOp(c.diff.bytesPerOp)} ⚠`;
+    }
 
     let stabilityStr = 'Stable';
     if (c.diff.crashes > 0) stabilityStr = `+${c.diff.crashes} Crash 🔴`;
@@ -322,7 +348,7 @@ export function renderAutoBenchCompareMarkdownReport(delta, options = {}) {
     else if (c.diff.cliffs > 0) stabilityStr = `+${c.diff.cliffs} Cliff ⚠️`;
     else if (c.diff.cliffs < 0) stabilityStr = `${Math.abs(c.diff.cliffs)} Cliff Fixed 🎉`;
 
-    lines.push(`| \`${c.name}\` | ${formatNumber(c.base.opsPerSec)} | ${formatNumber(c.current.opsPerSec)} | ${opsSign}${formatPercent(c.diff.opsPercent)} | ${latSign}${formatPercent(c.diff.avgPercent)} | ${stabilityStr} | **${c.status}** |`);
+    lines.push(`| \`${c.name}\` | ${formatNumber(c.base.opsPerSec)} | ${formatNumber(c.current.opsPerSec)} | ${opsSign}${formatPercent(c.diff.opsPercent)} | ${allocDeltaStr} | ${latSign}${formatPercent(c.diff.avgPercent)} | ${stabilityStr} | **${c.status}** |`);
   }
   lines.push('');
 
@@ -351,7 +377,7 @@ export function renderAutoBenchCompareAiReport(delta, options = {}) {
 
   lines.push('## FUNCTION_DELTAS');
   for (const c of comparisons) {
-    lines.push(`- ${c.name}: ops=${c.diff.opsPercent >= 0 ? '+' : ''}${formatPercent(c.diff.opsPercent)} (${formatNumber(c.base.opsPerSec)}->${formatNumber(c.current.opsPerSec)}), lat=${c.diff.avgPercent >= 0 ? '+' : ''}${formatPercent(c.diff.avgPercent)}, status=${c.status}`);
+    lines.push(`- ${c.name}: ops=${c.diff.opsPercent >= 0 ? '+' : ''}${formatPercent(c.diff.opsPercent)} (${formatNumber(c.base.opsPerSec)}->${formatNumber(c.current.opsPerSec)}), alloc=${formatBytesPerOp(c.diff.bytesPerOp)}, lat=${c.diff.avgPercent >= 0 ? '+' : ''}${formatPercent(c.diff.avgPercent)}, status=${c.status}`);
   }
   lines.push('');
 

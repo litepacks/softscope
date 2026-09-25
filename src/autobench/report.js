@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { formatDuration, formatNumber, renderTable } from '../report/format.js';
+import { formatDuration, formatNumber, formatBytesPerOp, renderTable } from '../report/format.js';
 import { renderCallTree } from '../report/tree.js';
 
 const RED = '\x1b[31m';
@@ -9,6 +9,16 @@ const CYAN = '\x1b[36m';
 const BOLD = '\x1b[1m';
 const DIM = '\x1b[2m';
 const RESET = '\x1b[0m';
+
+function stripAnsi(str) {
+  return String(str).replace(/\x1b\[[0-9;]*m/g, '');
+}
+
+function padRightVisible(str, len) {
+  const vlen = stripAnsi(str).length;
+  if (vlen >= len) return String(str);
+  return String(str) + ' '.repeat(len - vlen);
+}
 
 function formatSeedArgs(args) {
   if (!args || args.length === 0) return '()';
@@ -32,6 +42,14 @@ export function renderAutoBenchTerminalReport(results, options = {}) {
   const fns = results.functions || [];
   const callableFns = fns.filter(f => f.status === 'ok');
   const totalOps = callableFns.reduce((acc, f) => acc + (f.opsPerSec || 0), 0);
+  const totalGcs = results.totalGcCycles != null
+    ? results.totalGcCycles
+    : callableFns.reduce((acc, f) => acc + (f.gcCount || 0), 0);
+  const avgAlloc = results.avgBytesPerOp != null
+    ? results.avgBytesPerOp
+    : (callableFns.length > 0
+      ? callableFns.reduce((acc, f) => acc + (f.bytesPerOp || 0), 0) / callableFns.length
+      : 0);
 
   const cliffsStr = results.totalCliffs > 0
     ? `${YELLOW}${results.totalCliffs} ⚠${RESET}`
@@ -41,10 +59,24 @@ export function renderAutoBenchTerminalReport(results, options = {}) {
     ? `${RED}${results.totalCrashes} 🔴${RESET}`
     : `${GREEN}0 ✔${RESET}`;
 
+  const gcStr = totalGcs > 0
+    ? `${YELLOW}${totalGcs} ⚠${RESET}`
+    : `${GREEN}0 ✔${RESET}`;
+
+  const col1 = 'Target: ' + results.targetFile;
+  const col2 = 'Iterations: ' + formatNumber(results.iterations);
+  const col3 = 'Functions Tested: ' + String(fns.length);
+  const col4 = 'Total Throughput: ' + formatNumber(totalOps) + ' ops/s';
+  const col5 = 'Latency Cliffs:   ' + cliffsStr;
+  const col6 = 'Unhandled Crashes: ' + crashesStr;
+  const col7 = 'Avg Alloc/Op:     ' + formatBytesPerOp(avgAlloc);
+  const col8 = 'Total GC Cycles:   ' + gcStr;
+
   lines.push('┌─ Auto-Benchmark & Robustness Overview ────────────────────────────────────┐');
-  lines.push(`│ Target: ${results.targetFile.padEnd(28)} Iterations: ${formatNumber(results.iterations).padEnd(22)} │`);
-  lines.push(`│ Functions Tested: ${String(fns.length).padEnd(18)} Total Throughput: ${(formatNumber(totalOps) + ' ops/s').padEnd(16)} │`);
-  lines.push(`│ Latency Cliffs:   ${cliffsStr.padEnd(28)} Unhandled Crashes: ${crashesStr.padEnd(20)} │`);
+  lines.push(`│ ${padRightVisible(col1, 38)}${padRightVisible(col2, 36)}│`);
+  lines.push(`│ ${padRightVisible(col3, 38)}${padRightVisible(col4, 36)}│`);
+  lines.push(`│ ${padRightVisible(col5, 38)}${padRightVisible(col6, 36)}│`);
+  lines.push(`│ ${padRightVisible(col7, 38)}${padRightVisible(col8, 36)}│`);
   lines.push('└───────────────────────────────────────────────────────────────────────────┘');
   lines.push('');
 
@@ -54,6 +86,7 @@ export function renderAutoBenchTerminalReport(results, options = {}) {
     const cols = [
       { key: 'name', label: 'Function', align: 'left', minWidth: 16, maxWidth: 30 },
       { key: 'ops', label: 'Ops / sec', align: 'right', minWidth: 14 },
+      { key: 'alloc', label: 'Alloc / op', align: 'right', minWidth: 11 },
       { key: 'avg', label: 'Avg Latency', align: 'right', minWidth: 11 },
       { key: 'min', label: 'Min', align: 'right', minWidth: 9 },
       { key: 'max', label: 'Max', align: 'right', minWidth: 9 },
@@ -66,11 +99,26 @@ export function renderAutoBenchTerminalReport(results, options = {}) {
         statusStr = `${RED}Crashes (${fn.crashes.length})${RESET}`;
       } else if (fn.cliffs && fn.cliffs.length > 0) {
         statusStr = `${YELLOW}Cliff (${fn.cliffs.length})${RESET}`;
+      } else if (fn.gcCount && fn.gcCount > 0) {
+        statusStr = `${YELLOW}GC (${fn.gcCount})${RESET}`;
+      }
+
+      let allocStr = `${GREEN}0 B/op${RESET}`;
+      const bOp = fn.bytesPerOp || 0;
+      if (bOp > 0) {
+        if (bOp < 128) {
+          allocStr = `${CYAN}${formatBytesPerOp(bOp)}${RESET}`;
+        } else if (bOp < 1024) {
+          allocStr = `${YELLOW}${formatBytesPerOp(bOp)}${RESET}`;
+        } else {
+          allocStr = `${RED}${formatBytesPerOp(bOp)}${RESET}`;
+        }
       }
 
       return {
         name: fn.name,
         ops: formatNumber(fn.opsPerSec) + ' /s',
+        alloc: allocStr,
         avg: formatDuration(fn.avgMs),
         min: formatDuration(fn.minMs),
         max: formatDuration(fn.maxMs),
@@ -161,28 +209,41 @@ export function renderAutoBenchTerminalReport(results, options = {}) {
 export function renderAutoBenchMarkdownReport(results, options = {}) {
   const lines = [];
 
+  const callableFns = (results.functions || []).filter(f => f.status === 'ok');
+  const totalGcs = results.totalGcCycles != null
+    ? results.totalGcCycles
+    : callableFns.reduce((acc, f) => acc + (f.gcCount || 0), 0);
+  const avgAlloc = results.avgBytesPerOp != null
+    ? results.avgBytesPerOp
+    : (callableFns.length > 0
+      ? callableFns.reduce((acc, f) => acc + (f.bytesPerOp || 0), 0) / callableFns.length
+      : 0);
+
   lines.push('# Softscope Auto-Benchmark & Robustness Report');
   lines.push('');
   lines.push(`- **Target**: \`${results.targetFile}\``);
   lines.push(`- **Iterations**: ${formatNumber(results.iterations)} per function`);
+  lines.push(`- **Avg Alloc/Op**: ${formatBytesPerOp(avgAlloc)}`);
+  lines.push(`- **Total GC Cycles**: ${totalGcs}`);
   lines.push(`- **Crashes**: ${results.totalCrashes > 0 ? `🔴 ${results.totalCrashes}` : '🟢 0'}`);
   lines.push(`- **Latency Cliffs**: ${results.totalCliffs > 0 ? `⚠ ${results.totalCliffs}` : '🟢 0'}`);
   lines.push('');
 
-  const callableFns = (results.functions || []).filter(f => f.status === 'ok');
   if (callableFns.length > 0) {
     lines.push('## Throughput & Latency');
     lines.push('');
-    lines.push('| Function | Ops / sec | Avg Latency | Min | Max | Robustness |');
-    lines.push('| :--- | :---: | :---: | :---: | :---: | :---: |');
+    lines.push('| Function | Ops / sec | Alloc / op | Avg Latency | Min | Max | Robustness |');
+    lines.push('| :--- | :---: | :---: | :---: | :---: | :---: | :---: |');
     for (const fn of callableFns) {
       const robustness = (fn.crashes && fn.crashes.length > 0)
         ? `🔴 Crashes (${fn.crashes.length})`
         : (fn.cliffs && fn.cliffs.length > 0)
           ? `⚠ Cliffs (${fn.cliffs.length})`
-          : '🟢 Stable';
+          : (fn.gcCount && fn.gcCount > 0)
+            ? `⚠ GC (${fn.gcCount})`
+            : '🟢 Stable';
 
-      lines.push(`| \`${fn.name}\` | **${formatNumber(fn.opsPerSec)} /s** | ${formatDuration(fn.avgMs)} | ${formatDuration(fn.minMs)} | ${formatDuration(fn.maxMs)} | ${robustness} |`);
+      lines.push(`| \`${fn.name}\` | **${formatNumber(fn.opsPerSec)} /s** | ${formatBytesPerOp(fn.bytesPerOp)} | ${formatDuration(fn.avgMs)} | ${formatDuration(fn.minMs)} | ${formatDuration(fn.maxMs)} | ${robustness} |`);
     }
     lines.push('');
   }
@@ -259,18 +320,43 @@ export function renderAutoBenchMarkdownReport(results, options = {}) {
 export function renderAutoBenchAiReport(results, options = {}) {
   const lines = [];
 
+  const callableFns = (results.functions || []).filter(f => f.status === 'ok');
+  const totalGcs = results.totalGcCycles != null
+    ? results.totalGcCycles
+    : callableFns.reduce((acc, f) => acc + (f.gcCount || 0), 0);
+  const avgAlloc = results.avgBytesPerOp != null
+    ? results.avgBytesPerOp
+    : (callableFns.length > 0
+      ? callableFns.reduce((acc, f) => acc + (f.bytesPerOp || 0), 0) / callableFns.length
+      : 0);
+
   lines.push('# Softscope AI Auto-Bench & Edge-Case Profile');
   lines.push(`TARGET: ${results.targetFile}`);
   lines.push(`TOTAL_CRASHES: ${results.totalCrashes}`);
   lines.push(`TOTAL_CLIFFS: ${results.totalCliffs}`);
+  lines.push(`TOTAL_GC_CYCLES: ${totalGcs}`);
+  lines.push(`AVG_ALLOC_PER_OP: ${formatBytesPerOp(avgAlloc)}`);
   lines.push('');
 
-  const callableFns = (results.functions || []).filter(f => f.status === 'ok');
   lines.push('## THROUGHPUT SUMMARY');
   for (const fn of callableFns) {
-    lines.push(`- ${fn.name}: ${formatNumber(fn.opsPerSec)} ops/sec (avg: ${formatDuration(fn.avgMs)})`);
+    lines.push(`- ${fn.name}: ${formatNumber(fn.opsPerSec)} ops/sec (alloc: ${formatBytesPerOp(fn.bytesPerOp)}, avg: ${formatDuration(fn.avgMs)})`);
   }
   lines.push('');
+
+  const highAllocFns = callableFns.filter(f => (f.bytesPerOp && f.bytesPerOp >= 128) || (f.gcCount && f.gcCount > 0));
+  if (highAllocFns.length > 0) {
+    lines.push('## MEMORY & GC ALLOCATION HAZARDS');
+    for (const fn of highAllocFns) {
+      lines.push(`- Function: \`${fn.name}\``);
+      lines.push(`  Allocations: ${formatBytesPerOp(fn.bytesPerOp)} per op`);
+      if (fn.gcCount > 0) {
+        lines.push(`  GC Overhead: ${fn.gcCount} GC pauses (${fn.gcTimeMs}ms)`);
+      }
+      lines.push(`  Action: Optimize memory allocations or reuse buffers/objects in \`${fn.name}\` to reduce GC pressure.`);
+    }
+    lines.push('');
+  }
 
   if (results.callEdges && results.callEdges.length > 0) {
     const rootNames = (results.functions || []).map(f => f.name || f.exportName);
@@ -333,6 +419,16 @@ export function renderAutoBenchAiReport(results, options = {}) {
  * Versioned JSON output.
  */
 export function renderAutoBenchJsonReport(results) {
+  const callableFns = (results.functions || []).filter(f => f.status === 'ok');
+  const totalGcs = results.totalGcCycles != null
+    ? results.totalGcCycles
+    : callableFns.reduce((acc, f) => acc + (f.gcCount || 0), 0);
+  const avgAlloc = results.avgBytesPerOp != null
+    ? results.avgBytesPerOp
+    : (callableFns.length > 0
+      ? callableFns.reduce((acc, f) => acc + (f.bytesPerOp || 0), 0) / callableFns.length
+      : 0);
+
   return JSON.stringify({
     version: 1,
     type: 'softscope-autobench',
@@ -340,6 +436,8 @@ export function renderAutoBenchJsonReport(results) {
     iterations: results.iterations,
     totalCrashes: results.totalCrashes,
     totalCliffs: results.totalCliffs,
+    totalGcCycles: totalGcs,
+    avgBytesPerOp: Math.round(avgAlloc * 10) / 10,
     functions: results.functions,
     callEdges: results.callEdges || []
   }, null, 2);
