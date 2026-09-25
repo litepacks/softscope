@@ -66,6 +66,9 @@ export function parseCliArgs(rawArgs, cwd = process.cwd()) {
     configFile: rcFile,
     projectRoot: path.resolve(cwd),
     noCapture: false,
+    crashes: rcConfig.crashes ? path.resolve(cwd, rcConfig.crashes) : null,
+    testSuite: false,
+    clear: false,
     command: []
   };
 
@@ -231,6 +234,18 @@ export function parseCliArgs(rawArgs, cwd = process.cwd()) {
     } else if (arg === '--diff') {
       options.diff = true;
       options.compare = path.resolve(cwd, '.softscope/last-pin.json');
+      i++;
+    } else if (arg === '--crashes') {
+      options.crashes = rawArgs[i + 1] ? path.resolve(cwd, rawArgs[i + 1]) : null;
+      i += 2;
+    } else if (arg.startsWith('--crashes=')) {
+      options.crashes = path.resolve(cwd, arg.slice('--crashes='.length));
+      i++;
+    } else if (arg === '--generate-test' || (arg === '--test' && command.length > 0 && command[0] === 'replay')) {
+      options.testSuite = true;
+      i++;
+    } else if (arg === '--clear') {
+      options.clear = true;
       i++;
     } else {
       command.push(arg);

@@ -23,6 +23,7 @@ import {
   renderAutoBenchCompareAiReport,
   renderAutoBenchCompareJsonReport
 } from './compare.js';
+import { recordDiscoveredCrashes } from './replay.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -210,6 +211,7 @@ async function run() {
         crashes.push({
           label: fuzzCase.label,
           seed: fuzzCase.args,
+          args: fuzzCase.args,
           error: fuzzErr.message || String(fuzzErr),
           stack: fuzzErr.stack || ''
         });
@@ -498,6 +500,15 @@ export async function executeAutoBenchSingle(targetFile, options, pickedFunction
     totalCrashes: fnResults.reduce((acc, f) => acc + (f.crashes ? f.crashes.length : 0), 0),
     totalCliffs: fnResults.reduce((acc, f) => acc + (f.cliffs ? f.cliffs.length : 0), 0)
   };
+
+  // Record crashes if any occurred for instant replay
+  if (results.totalCrashes > 0) {
+    try {
+      recordDiscoveredCrashes(targetFile, fnResults, options);
+    } catch {
+      // Ignore crash recording error
+    }
+  }
 
   // 5. Save baseline if requested
   if (options.saveBaseline) {

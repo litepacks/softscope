@@ -585,6 +585,7 @@ Usage:
   softscope <command> [...args]
   softscope compare <baseline.json> <current.json>
   softscope auto-bench <file> [options]
+  softscope replay [file] [options]
   softscope test [...args]
   softscope pin <target>
   softscope diff [target]
@@ -593,6 +594,10 @@ Examples:
   softscope app.js
   softscope test
   softscope test --no-capture
+  softscope replay
+  softscope replay src/math.js
+  softscope replay --test
+  softscope replay --clear
   softscope bench/run.js
   softscope pin bench/run.js
   softscope diff bench/run.js
@@ -621,6 +626,9 @@ Options:
   --capture-seeds [file]   Record real function argument samples to seeds JSON file
   --no-capture             Disable automatic seed capture when running softscope test
   --seeds <file>           Use captured seeds for auto-benchmarking
+  --crashes <file>         Path to recorded crash registry (default: .softscope/crashes.json)
+  --generate-test, --test  Generate standalone native node --test regression test suite from recorded crashes
+  --clear                  Clear recorded crash history
   --fuzz                   Enable boundary/edge-case fuzzing during auto-bench (default: true)
   --no-fuzz                Disable edge-case fuzzing during auto-bench
   --iterations <n>         Number of iterations per function in auto-bench (default: 10000)
