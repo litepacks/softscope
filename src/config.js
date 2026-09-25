@@ -65,6 +65,7 @@ export function parseCliArgs(rawArgs, cwd = process.cwd()) {
     version: false,
     configFile: rcFile,
     projectRoot: path.resolve(cwd),
+    noCapture: false,
     command: []
   };
 
@@ -95,6 +96,7 @@ export function parseCliArgs(rawArgs, cwd = process.cwd()) {
     } else if (arg.startsWith('--config=')) {
       i++;
     } else if (arg === '--no-capture' || arg === '--no-capture-seeds') {
+      options.noCapture = true;
       options.captureSeeds = null;
       i++;
     } else if (arg === '--version' || arg === '-v') {

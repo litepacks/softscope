@@ -112,3 +112,112 @@ obj.on('error', () => {});
   assert.equal(calls[0].type, 'enter');
   assert.equal(calls[1].type, 'exit');
 });
+
+test('Transformation: guarantees enter and exit balance when functions throw errors', () => {
+  const code = `
+function thrower() {
+  throw new Error("fatal failure");
+}
+`;
+
+  const registry = createFunctionRegistry();
+  const { code: transformed } = transformSource(code, 'thrower.js', 'thrower.js', registry);
+
+  const calls = [];
+  const __softscope = {
+    enter(id) { calls.push({ type: 'enter', id }); },
+    exit(id) { calls.push({ type: 'exit', id }); },
+    registerFile() {}
+  };
+
+  const fn = new Function('__softscope', `${transformed}; return { thrower };`);
+  const scope = fn(__softscope);
+
+  assert.throws(() => {
+    scope.thrower();
+  }, /fatal failure/);
+
+  // Even though an error was thrown, finally must have called exit
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].type, 'enter');
+  assert.equal(calls[1].type, 'exit');
+});
+
+test('Transformation: correctly instruments concise arrow functions returning object literals', () => {
+  const code = `
+const makeUser = (name, age) => ({ user: name, age: age * 2 });
+`;
+
+  const registry = createFunctionRegistry();
+  const { code: transformed, functions } = transformSource(code, 'user.js', 'user.js', registry);
+
+  assert.equal(functions.length, 1);
+
+  const calls = [];
+  const __softscope = {
+    enter(id) { calls.push({ type: 'enter', id }); },
+    exit(id) { calls.push({ type: 'exit', id }); },
+    registerFile() {}
+  };
+
+  const fn = new Function('__softscope', `${transformed}; return { makeUser };`);
+  const scope = fn(__softscope);
+
+  const result = scope.makeUser('alice', 25);
+  assert.deepEqual(result, { user: 'alice', age: 50 });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].type, 'enter');
+  assert.equal(calls[1].type, 'exit');
+});
+
+test('Transformation: preserves shebang at line 1', () => {
+  const code = `#!/usr/bin/env node
+function main() {
+  return 100;
+}
+`;
+
+  const registry = createFunctionRegistry();
+  const { code: transformed } = transformSource(code, 'cli.js', 'cli.js', registry);
+
+  assert.ok(transformed.startsWith('#!/usr/bin/env node\n'), 'Transformed code must keep shebang on line 1');
+  assert.ok(transformed.includes('__softscope.enter'), 'Should still instrument functions');
+});
+
+test('Transformation: preserves this binding and semantics across class methods and constructors', () => {
+  const code = `
+class Calculator {
+  constructor(initial = 0) {
+    this.value = initial;
+  }
+  add(n) {
+    this.value += n;
+    return this.value;
+  }
+  static create(val) {
+    return new Calculator(val);
+  }
+}
+`;
+
+  const registry = createFunctionRegistry();
+  const { code: transformed } = transformSource(code, 'calc.js', 'calc.js', registry);
+
+  const calls = [];
+  const __softscope = {
+    enter(id) { calls.push({ type: 'enter', id }); },
+    exit(id) { calls.push({ type: 'exit', id }); },
+    registerFile() {}
+  };
+
+  const fn = new Function('__softscope', `${transformed}; return { Calculator };`);
+  const { Calculator } = fn(__softscope);
+
+  const calc = Calculator.create(10);
+  assert.equal(calc.add(5), 15);
+  assert.equal(calc.value, 15);
+
+  // create + constructor + add
+  assert.ok(calls.length >= 6);
+  assert.equal(calls[0].type, 'enter');
+});

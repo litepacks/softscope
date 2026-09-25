@@ -45,3 +45,73 @@ test('Codeframe: createCodeFrame generates code snippet with gutter and caret', 
   assert.ok(frame.includes('^ Cannot read properties of null'), 'should contain caret pointer and message');
   assert.ok(frame.includes('name.toUpperCase()'), 'should include target code');
 });
+
+test('Codeframe: handles paths with spaces and parentheses in stack traces', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const tmpDir = path.join(os.tmpdir(), `softscope space test-${Date.now()}`);
+  fs.mkdirSync(tmpDir, { recursive: true });
+
+  try {
+    const spaceFile = path.join(tmpDir, 'my target.js');
+    fs.writeFileSync(spaceFile, 'export function boom() {\n  throw new Error("fail");\n}\n', 'utf-8');
+
+    const stackWithParens = `Error: fail\n    at boom (${spaceFile}:2:9)\n    at node:internal/main:1:1`;
+    const parsed1 = parseStackFrame(stackWithParens);
+    assert.ok(parsed1, 'should parse stack trace with spaces inside parentheses');
+    assert.equal(parsed1.filePath, path.resolve(spaceFile));
+    assert.equal(parsed1.line, 2);
+    assert.equal(parsed1.column, 9);
+
+    const stackWithoutParens = `Error: fail\n    at ${spaceFile}:2:9`;
+    const parsed2 = parseStackFrame(stackWithoutParens);
+    assert.ok(parsed2, 'should parse stack trace with spaces without parentheses');
+    assert.equal(parsed2.filePath, path.resolve(spaceFile));
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // Ignore
+    }
+  }
+});
+
+test('Codeframe: handles CRLF line endings, extreme line/col boundaries, and empty files', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const tmpDir = path.join(os.tmpdir(), `softscope-crlf-test-${Date.now()}`);
+  fs.mkdirSync(tmpDir, { recursive: true });
+
+  try {
+    const crlfFile = path.join(tmpDir, 'crlf.js');
+    fs.writeFileSync(crlfFile, 'line1\r\nline2\r\nline3\r\n', 'utf-8');
+
+    const frame = createCodeFrame(crlfFile, 2, 3, { color: false });
+    assert.ok(!frame.includes('\r'), 'Codeframe must strip carriage return characters');
+    assert.ok(frame.includes('> 2 | line2'));
+
+    // Boundary: line number <= 0 clamps to line 1
+    const clampedUnder = createCodeFrame(crlfFile, -5, 1, { color: false });
+    assert.ok(clampedUnder.includes('> 1 | line1'));
+
+    // Boundary: line number > total lines clamps to last line
+    const clampedOver = createCodeFrame(crlfFile, 999, 1, { color: false });
+    assert.ok(clampedOver.includes('> 3 | line3') || clampedOver.includes('> 4 |'));
+
+    // Boundary: column <= 0 does not crash or print negative indents
+    const zeroCol = createCodeFrame(crlfFile, 1, 0, { color: false });
+    assert.ok(zeroCol.includes('> 1 | line1'));
+
+    // Boundary: empty file
+    const emptyFile = path.join(tmpDir, 'empty.js');
+    fs.writeFileSync(emptyFile, '', 'utf-8');
+    const emptyFrame = createCodeFrame(emptyFile, 1, 1);
+    assert.equal(emptyFrame, '');
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // Ignore
+    }
+  }
+});

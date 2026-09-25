@@ -93,6 +93,37 @@ test('Auto-Bench Seeds: synthesizes baseline seeds and generates edge-case mutat
   assert.ok(hasEmptyStr);
 });
 
+test('Auto-Bench Seeds: infers appropriate values for callbacks, arrays, objects, and zero-param functions', () => {
+  // 1. Zero parameter function
+  const zeroParamFn = { name: 'getAnswer', params: [] };
+  const { baselineSeed: zeroSeed, fuzzSeeds: zeroFuzz } = synthesizeSeeds(zeroParamFn, new Map());
+  assert.deepEqual(zeroSeed, []);
+  assert.equal(zeroFuzz.length, 0);
+
+  // 2. Callback, array, and options parameters
+  const complexFn = {
+    name: 'processBatch',
+    params: [
+      { name: 'items' },
+      { name: 'options' },
+      { name: 'onDone' }
+    ]
+  };
+  const { baselineSeed: complexSeed } = synthesizeSeeds(complexFn, new Map());
+  assert.ok(Array.isArray(complexSeed[0]), 'items should be an array');
+  assert.equal(typeof complexSeed[1], 'object', 'options should be an object');
+  assert.equal(typeof complexSeed[2], 'function', 'onDone should be a function');
+
+  // 3. Corrupted or missing seeds file
+  assert.equal(loadSeedsFile('nonexistent-seeds-file-12345.json').size, 0);
+});
+
+test('Auto-Bench AST: throws clear error when analyzing non-existent file', () => {
+  assert.throws(() => {
+    analyzeModule('/non/existent/file.js');
+  }, /Target file not found/);
+});
+
 test('CLI: auto-bench benchmarks functions and detects edge-case crashes and latency cliffs', async () => {
   const fixturePath = path.join(FIXTURES_DIR, 'autobench', 'math.js');
   const { stdout } = await runCli(['auto-bench', fixturePath, '--iterations', '500']);

@@ -71,7 +71,7 @@ function inferParamValue(param) {
   if (/is|has|flag|enabled/i.test(name)) {
     return true;
   }
-  if (/fn|cb|callback|handler/i.test(name)) {
+  if (/fn|cb|callback|handler|listener|done|next|^on[a-z0-9_]/i.test(name)) {
     return () => {};
   }
 

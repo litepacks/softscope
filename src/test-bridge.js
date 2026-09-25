@@ -18,7 +18,7 @@ export async function runTestBridge(options) {
     const arg = rawArgs[i];
     if (arg === '--no-capture' || arg === '--no-capture-seeds') {
       captureSeeds = false;
-    } else if (arg === '--capture-seeds' || arg === '--seeds') {
+    } else if (arg === '--capture-seeds') {
       captureSeeds = true;
       if (rawArgs[i + 1] && !rawArgs[i + 1].startsWith('-')) {
         customSeedsFile = rawArgs[i + 1];
@@ -27,8 +27,12 @@ export async function runTestBridge(options) {
     } else if (arg.startsWith('--capture-seeds=')) {
       captureSeeds = true;
       customSeedsFile = arg.slice('--capture-seeds='.length);
+    } else if (arg === '--seeds') {
+      if (rawArgs[i + 1] && !rawArgs[i + 1].startsWith('-')) {
+        customSeedsFile = rawArgs[i + 1];
+        i++;
+      }
     } else if (arg.startsWith('--seeds=')) {
-      captureSeeds = true;
       customSeedsFile = arg.slice('--seeds='.length);
     } else {
       forwardedArgs.push(arg);
@@ -38,7 +42,9 @@ export async function runTestBridge(options) {
   // 2. Discover test runner
   const testCmd = resolveTestCommand(projectRoot, forwardedArgs);
 
-  if (captureSeeds && !options.captureSeeds) {
+  if (!captureSeeds || options.noCapture) {
+    options.captureSeeds = null;
+  } else if (!options.captureSeeds || customSeedsFile) {
     const seedsTarget = customSeedsFile || options.seeds || 'seeds.json';
     options.captureSeeds = path.resolve(projectRoot, seedsTarget);
   }

@@ -18,9 +18,10 @@ export function renderCallTree(edges, {
   const inDegree = new Map();
 
   for (const edge of edges) {
-    const caller = edge.callerName;
-    const callee = edge.calleeName;
-    const calls = edge.calls || 0;
+    if (!edge || typeof edge !== 'object') continue;
+    const caller = edge.callerName || 'anonymous';
+    const callee = edge.calleeName || 'anonymous';
+    const calls = Number.isFinite(edge.calls) ? Math.max(0, Math.floor(edge.calls)) : 0;
 
     if (!callerMap.has(caller)) {
       callerMap.set(caller, []);
@@ -34,26 +35,41 @@ export function renderCallTree(edges, {
   }
 
   // 2. Identify roots
+  const trueRoots = Array.from(callerMap.keys()).filter(name => inDegree.get(name) === 0);
+  const reachableFromRoots = new Set();
+
+  function markReachable(name) {
+    if (reachableFromRoots.has(name)) return;
+    reachableFromRoots.add(name);
+    for (const child of callerMap.get(name) || []) {
+      markReachable(child.calleeName);
+    }
+  }
+
+  for (const root of trueRoots) {
+    markReachable(root);
+  }
+
   let roots = [];
-  if (rootNames && rootNames.length > 0) {
+  const hasUserFilter = rootNames && rootNames.length > 0;
+  if (hasUserFilter) {
     const rootSet = new Set(rootNames);
     roots = Array.from(callerMap.keys()).filter(name => rootSet.has(name));
+  } else {
+    roots = [...trueRoots];
   }
 
-  if (roots.length === 0) {
-    // Functions with 0 incoming calls are true roots
-    roots = Array.from(callerMap.keys()).filter(name => inDegree.get(name) === 0);
-  }
-
-  // Fallback if there's a pure cycle: sort by most calls
-  if (roots.length === 0) {
+  // Fallback if there's a pure cycle across entire graph
+  if (roots.length === 0 && !hasUserFilter) {
     roots = Array.from(callerMap.keys());
   }
 
   const lines = [];
+  const globallyVisited = new Set();
 
   function traverseNode(nodeName, calls = null, prefix = '', isLast = true, visited = new Set(), depth = 0) {
     if (depth > maxDepth) return;
+    globallyVisited.add(nodeName);
 
     const isRoot = depth === 0;
     const connector = isRoot ? '' : (isLast ? '└─ ' : '├─ ');
@@ -94,8 +110,19 @@ export function renderCallTree(edges, {
 
   for (let i = 0; i < roots.length; i++) {
     const root = roots[i];
-    if (i > 0) lines.push('');
+    if (lines.length > 0) lines.push('');
     traverseNode(root, null, '', true, new Set(), 0);
+  }
+
+  // Render any orphaned cycle components not reachable from roots (unless user specified explicit roots)
+  if (!hasUserFilter) {
+    const cycleOrphans = Array.from(callerMap.keys()).filter(name => !reachableFromRoots.has(name) && !globallyVisited.has(name));
+    for (const orphan of cycleOrphans) {
+      if (!globallyVisited.has(orphan)) {
+        if (lines.length > 0) lines.push('');
+        traverseNode(orphan, null, '', true, new Set(), 0);
+      }
+    }
   }
 
   return lines.join('\n');

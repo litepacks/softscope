@@ -81,3 +81,38 @@ test('RC Loader: explicit --config loads specified configuration file', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('RC Loader: handles malformed JSON, arrays, nulls, and missing files with clear errors', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'softscope-rc-errors-'));
+
+  try {
+    // 1. Missing explicit config throws
+    assert.throws(() => {
+      loadConfig(tmpDir, 'nonexistent-config.json');
+    }, /Config file not found/);
+
+    // 2. Malformed JSON throws
+    const badJson = path.join(tmpDir, '.softscoperc.json');
+    fs.writeFileSync(badJson, '{ iterations: invalid json', 'utf-8');
+    assert.throws(() => {
+      loadConfig(tmpDir);
+    }, /Invalid JSON in config file/);
+    fs.unlinkSync(badJson);
+
+    // 3. Array instead of object throws
+    const arrayJson = path.join(tmpDir, '.softscoperc.json');
+    fs.writeFileSync(arrayJson, '[1, 2, 3]', 'utf-8');
+    assert.throws(() => {
+      loadConfig(tmpDir);
+    }, /must contain a valid JSON object/);
+    fs.unlinkSync(arrayJson);
+
+    // 4. package.json with invalid "softscope" field (string or boolean) is ignored safely
+    const pkgPath = path.join(tmpDir, 'package.json');
+    fs.writeFileSync(pkgPath, JSON.stringify({ name: 'test', softscope: 'invalid-string' }), 'utf-8');
+    const { config } = loadConfig(tmpDir);
+    assert.deepEqual(config, {});
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

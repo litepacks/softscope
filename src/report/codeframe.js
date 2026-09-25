@@ -23,11 +23,14 @@ export function parseStackFrame(stack, preferredFile = null) {
     }
 
     // Match patterns like:
-    // at tokenize (file:///path/to/file.ts:83:24)
-    // at /path/to/file.ts:83:24
-    const match = trimmed.match(/(?:at\s+(?:.*?\s+\()?)?(?:file:\/\/)?([a-zA-Z0-9_\-./\\]+):(\d+):(\d+)\)?$/);
+    // at tokenize (file:///path/to/my project/file.ts:83:24)
+    // at /path/to/my project/file.ts:83:24
+    let match = trimmed.match(/\((?:file:\/\/)?([^)]+?):(\d+):(\d+)\)$/);
+    if (!match) {
+      match = trimmed.match(/(?:at\s+)?(?:file:\/\/)?(.*?):(\d+):(\d+)$/);
+    }
     if (match) {
-      let filePath = match[1];
+      let filePath = match[1].trim();
       const lineNum = parseInt(match[2], 10);
       const colNum = parseInt(match[3], 10);
 
@@ -83,6 +86,8 @@ export function createCodeFrame(filePath, line, column = 1, options = {}) {
     return '';
   }
 
+  if (!content || content.length === 0) return '';
+
   const allLines = content.split('\n');
   const totalLines = allLines.length;
   if (totalLines === 0) return '';
@@ -95,7 +100,8 @@ export function createCodeFrame(filePath, line, column = 1, options = {}) {
   const result = [];
 
   for (let i = startLine; i <= endLine; i++) {
-    const lineContent = allLines[i - 1] || '';
+    const rawLine = allLines[i - 1] || '';
+    const lineContent = rawLine.replace(/\r$/, '');
     const isTarget = i === targetLine;
     const lineNumStr = String(i).padStart(gutterWidth, ' ');
 
