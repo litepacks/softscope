@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { formatDuration, formatNumber, formatPercent } from './format.js';
+import { renderCallTree } from './tree.js';
 
 function formatLocation(fn) {
   if (!fn.file) return '-';
@@ -69,8 +70,18 @@ export function renderMarkdownReport(summary, options = {}) {
     lines.push('');
   }
 
-  // 3. Call relationships
+  // 3. Call hierarchy & relationships
   if (summary.edges && summary.edges.length > 0) {
+    const treeStr = renderCallTree(summary.edges, { color: false });
+    if (treeStr) {
+      lines.push('## Call Hierarchy');
+      lines.push('');
+      lines.push('```text');
+      lines.push(treeStr);
+      lines.push('```');
+      lines.push('');
+    }
+
     const topEdges = summary.edges.slice(0, Math.min(topLimit, 10));
     lines.push('## Call Relationships');
     lines.push('');

@@ -1,8 +1,11 @@
+import path from 'node:path';
 import { formatDuration, formatNumber, renderTable } from '../report/format.js';
+import { renderCallTree } from '../report/tree.js';
 
 const RED = '\x1b[31m';
 const GREEN = '\x1b[32m';
 const YELLOW = '\x1b[33m';
+const CYAN = '\x1b[36m';
 const BOLD = '\x1b[1m';
 const DIM = '\x1b[2m';
 const RESET = '\x1b[0m';
@@ -88,6 +91,15 @@ export function renderAutoBenchTerminalReport(results, options = {}) {
         for (const c of fn.crashes) {
           lines.push(`    - Trigger: ${YELLOW}${formatSeedArgs(c.seed)}${RESET} (${c.label})`);
           lines.push(`      Error:   ${RED}${c.error}${RESET}`);
+          if (c.file && c.line) {
+            const relFile = path.relative(process.cwd(), c.file) || c.file;
+            lines.push(`      Site:    ${CYAN}${relFile}:${c.line}:${c.column || 1}${RESET}`);
+          }
+          if (c.coloredCodeFrame) {
+            lines.push('');
+            lines.push(c.coloredCodeFrame);
+            lines.push('');
+          }
         }
       }
     }
@@ -109,13 +121,21 @@ export function renderAutoBenchTerminalReport(results, options = {}) {
     lines.push('');
   }
 
-  // 4. Call Relationships (Internal Invocations)
+  // 4. Call Relationships & Hierarchy
   if (results.callEdges && results.callEdges.length > 0) {
+    const rootNames = fns.map(f => f.name || f.exportName);
+    const treeStr = renderCallTree(results.callEdges, { rootNames, color: true });
+    if (treeStr) {
+      lines.push(`${BOLD}Call Hierarchy (Tree)${RESET}`);
+      lines.push(treeStr);
+      lines.push('');
+    }
+
     const topEdges = [...results.callEdges]
       .sort((a, b) => b.calls - a.calls)
       .slice(0, Math.max(10, options.top || 10));
 
-    lines.push(`${BOLD}Call Relationships (Internal Invocations)${RESET}`);
+    lines.push(`${BOLD}Call Invocations Summary${RESET}`);
     const edgeColumns = [
       { key: 'caller', label: 'Caller', align: 'left', minWidth: 20, maxWidth: 36 },
       { key: 'callee', label: 'Callee', align: 'left', minWidth: 20, maxWidth: 36 },
@@ -168,6 +188,17 @@ export function renderAutoBenchMarkdownReport(results, options = {}) {
   }
 
   if (results.callEdges && results.callEdges.length > 0) {
+    const rootNames = (results.functions || []).map(f => f.name || f.exportName);
+    const treeStr = renderCallTree(results.callEdges, { rootNames, color: false });
+    if (treeStr) {
+      lines.push('## Call Hierarchy');
+      lines.push('');
+      lines.push('```text');
+      lines.push(treeStr);
+      lines.push('```');
+      lines.push('');
+    }
+
     const topEdges = [...results.callEdges]
       .sort((a, b) => b.calls - a.calls)
       .slice(0, Math.max(10, options.top || 10));
@@ -192,6 +223,11 @@ export function renderAutoBenchMarkdownReport(results, options = {}) {
         lines.push('| :--- | :--- | :--- |');
         for (const c of fn.crashes) {
           lines.push(`| \`${formatSeedArgs(c.seed)}\` | ${c.label} | \`${c.error}\` |`);
+          if (c.codeFrame) {
+            lines.push('');
+            const locStr = c.file && c.line ? `**Site**: \`${path.relative(process.cwd(), c.file) || c.file}:${c.line}:${c.column || 1}\`\n\n` : '';
+            lines.push(locStr + '```javascript\n' + c.codeFrame + '\n```\n');
+          }
         }
         lines.push('');
       }
@@ -237,6 +273,14 @@ export function renderAutoBenchAiReport(results, options = {}) {
   lines.push('');
 
   if (results.callEdges && results.callEdges.length > 0) {
+    const rootNames = (results.functions || []).map(f => f.name || f.exportName);
+    const treeStr = renderCallTree(results.callEdges, { rootNames, color: false });
+    if (treeStr) {
+      lines.push('## CALL HIERARCHY');
+      lines.push(treeStr);
+      lines.push('');
+    }
+
     lines.push('## INTERNAL CALL RELATIONSHIPS');
     for (const e of results.callEdges) {
       lines.push(`- \`${e.callerName}\` -> \`${e.calleeName}\` (x${formatNumber(e.calls)})`);
@@ -252,6 +296,14 @@ export function renderAutoBenchAiReport(results, options = {}) {
           lines.push(`- Function: \`${fn.name}\``);
           lines.push(`  Seed: ${formatSeedArgs(c.seed)} (${c.label})`);
           lines.push(`  Error: ${c.error}`);
+          if (c.file && c.line) {
+            const relFile = path.relative(process.cwd(), c.file) || c.file;
+            lines.push(`  Location: ${relFile}:${c.line}:${c.column || 1}`);
+          }
+          if (c.codeFrame) {
+            lines.push('  Code Frame:');
+            lines.push(c.codeFrame.split('\n').map(l => '    ' + l).join('\n'));
+          }
           lines.push(`  Action: Add boundary validation / guard clause in \`${fn.name}\` for ${c.label}.`);
         }
       }

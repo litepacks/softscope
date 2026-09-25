@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { renderCallTree } from './tree.js';
 
 export function formatDuration(ms) {
   if (ms === undefined || ms === null || isNaN(ms)) return '0ms';
@@ -233,8 +234,15 @@ export function renderTerminalReport(summary, options = {}) {
     lines.push('');
   }
 
-  // 3. Call relationships Table
+  // 3. Call hierarchy & relationships
   if (summary.edges && summary.edges.length > 0) {
+    const callTree = renderCallTree(summary.edges, { color: true });
+    if (callTree) {
+      lines.push('Call hierarchy');
+      lines.push(callTree);
+      lines.push('');
+    }
+
     const topEdges = summary.edges.slice(0, Math.min(topLimit, 10));
     lines.push('Call relationships');
     const edgeColumns = [

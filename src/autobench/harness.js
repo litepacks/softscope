@@ -14,6 +14,7 @@ import {
 } from './report.js';
 import { promptFunctionPicker } from '../picker.js';
 import { runWatchLoop } from '../watch.js';
+import { parseStackFrame, createCodeFrame } from '../report/codeframe.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -201,7 +202,8 @@ async function run() {
         crashes.push({
           label: fuzzCase.label,
           seed: fuzzCase.args,
-          error: fuzzErr.message || String(fuzzErr)
+          error: fuzzErr.message || String(fuzzErr),
+          stack: fuzzErr.stack || ''
         });
       }
     }
@@ -455,6 +457,30 @@ export async function executeAutoBenchSingle(targetFile, options, pickedFunction
 
   const fnResults = Array.isArray(parsedPayload) ? parsedPayload : (parsedPayload.functions || []);
   const callEdges = parsedPayload.callEdges || [];
+
+  // Parse error locations and generate source code frames for unhandled crashes
+  for (const fn of fnResults) {
+    if (fn.crashes) {
+      for (const crash of fn.crashes) {
+        if (crash.stack) {
+          const frame = parseStackFrame(crash.stack, targetFile);
+          if (frame) {
+            crash.file = frame.filePath;
+            crash.line = frame.line;
+            crash.column = frame.column;
+            crash.codeFrame = createCodeFrame(frame.filePath, frame.line, frame.column, {
+              message: crash.error,
+              color: false
+            });
+            crash.coloredCodeFrame = createCodeFrame(frame.filePath, frame.line, frame.column, {
+              message: crash.error,
+              color: true
+            });
+          }
+        }
+      }
+    }
+  }
 
   const results = {
     targetFile: path.relative(process.cwd(), targetFile),
