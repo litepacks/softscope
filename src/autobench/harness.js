@@ -411,9 +411,18 @@ function findTsRunner(targetFile, projectRoot) {
     return { executable: rootCandidate, args: [] };
   }
 
+  const args = [];
+  if (/\.(ts|mts|cts)$/.test(targetFile)) {
+    const nodeMajor = parseInt(process.versions.node.split('.')[0], 10);
+    const nodeMinor = parseInt(process.versions.node.split('.')[1], 10);
+    if (nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 6)) {
+      args.push('--experimental-strip-types');
+    }
+  }
+
   return {
     executable: process.execPath,
-    args: []
+    args
   };
 }
 
