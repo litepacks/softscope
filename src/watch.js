@@ -111,6 +111,7 @@ export function setupWatchKeyboard({
   onToggleDiff,
   onToggleChanged,
   onToggleAll,
+  onToggleSequential,
   stdin = process.stdin,
   stdout = process.stdout
 }) {
@@ -165,6 +166,11 @@ export function setupWatchKeyboard({
       if (onToggleAll) onToggleAll();
       return;
     }
+
+    if (key.name === 's') {
+      if (onToggleSequential) onToggleSequential();
+      return;
+    }
   };
 
   stdin.on('keypress', handleKey);
@@ -190,6 +196,7 @@ export async function runWatchLoop({
   onToggleDiff = null,
   onToggleChanged = null,
   onToggleAll = null,
+  onToggleSequential = null,
   getState = null,
   stdin = process.stdin,
   stdout = process.stdout
@@ -219,6 +226,10 @@ export async function runWatchLoop({
     if (onToggleAll) {
       const status = state.all ? '\x1b[32mON\x1b[0m' : '\x1b[90mOFF\x1b[0m';
       shortcuts.push(`\x1b[1ma\x1b[0m: all (${status})`);
+    }
+    if (onToggleSequential) {
+      const status = state.sequential ? '\x1b[32mON\x1b[0m' : '\x1b[90mOFF\x1b[0m';
+      shortcuts.push(`\x1b[1ms\x1b[0m: seq (${status})`);
     }
     shortcuts.push('\x1b[1mq\x1b[0m: quit');
 
@@ -309,6 +320,11 @@ export async function runWatchLoop({
       }
     }
 
+    function toggleSequential() {
+      const msg = onToggleSequential();
+      execute(msg || 'Toggled sequential mode.');
+    }
+
     function initKeyboard() {
       return setupWatchKeyboard({
         onRerun: rerun,
@@ -318,6 +334,7 @@ export async function runWatchLoop({
         onToggleDiff: onToggleDiff ? toggleDiff : null,
         onToggleChanged: onToggleChanged ? toggleChanged : null,
         onToggleAll: onToggleAll ? toggleAll : null,
+        onToggleSequential: onToggleSequential ? toggleSequential : null,
         stdin,
         stdout
       });

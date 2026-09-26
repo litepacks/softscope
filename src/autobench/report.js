@@ -130,6 +130,19 @@ export function renderAutoBenchTerminalReport(results, options = {}) {
     lines.push('');
   }
 
+  // Failed, Incompatible or Timed Out Functions
+  const failedFns = fns.filter(f => f.status !== 'ok');
+  if (failedFns.length > 0) {
+    lines.push(`${BOLD}${RED}✖ Incompatible, Failed or Timed Out Functions (${failedFns.length}):${RESET}`);
+    for (const f of failedFns) {
+      const reason = f.status === 'timeout'
+        ? (f.error || 'Execution Timed Out')
+        : (f.error || f.status);
+      lines.push(`  • ${BOLD}${f.name}${RESET}: ${RED}${reason}${RESET}`);
+    }
+    lines.push('');
+  }
+
   // 2. Unhandled Crashes Breakdown
   if (results.totalCrashes > 0) {
     lines.push(`${BOLD}${RED}🔴 Unhandled Crashes Discovered:${RESET}`);
@@ -244,6 +257,19 @@ export function renderAutoBenchMarkdownReport(results, options = {}) {
             : '🟢 Stable';
 
       lines.push(`| \`${fn.name}\` | **${formatNumber(fn.opsPerSec)} /s** | ${formatBytesPerOp(fn.bytesPerOp)} | ${formatDuration(fn.avgMs)} | ${formatDuration(fn.minMs)} | ${formatDuration(fn.maxMs)} | ${robustness} |`);
+    }
+    lines.push('');
+  }
+
+  const failedFns = (results.functions || []).filter(f => f.status !== 'ok');
+  if (failedFns.length > 0) {
+    lines.push(`### ✖ Failed or Timed Out Functions (${failedFns.length})`);
+    lines.push('');
+    for (const fn of failedFns) {
+      const reason = fn.status === 'timeout'
+        ? (fn.error || 'Execution Timed Out')
+        : (fn.error || fn.status);
+      lines.push(`- **\`${fn.name}\`**: ${reason}`);
     }
     lines.push('');
   }

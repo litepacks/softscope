@@ -12,6 +12,7 @@ import {
   renderAutoBenchAiReport,
   renderAutoBenchJsonReport
 } from './report.js';
+import { createProgressReporter } from './progress.js';
 import { promptFunctionPicker } from '../picker.js';
 import { runWatchLoop } from '../watch.js';
 import { parseStackFrame, createCodeFrame } from '../report/codeframe.js';
@@ -119,8 +120,18 @@ async function run() {
   const testCases = ${JSON.stringify(testCases)};
   const targetIterations = ${iterations};
   const results = [];
+  const totalCases = testCases.length;
 
-  for (const tc of testCases) {
+  for (let t = 0; t < totalCases; t++) {
+    const tc = testCases[t];
+    origStderrWrite('__SOFTSCOPE_EVENT__' + JSON.stringify({
+      type: 'start',
+      index: t + 1,
+      total: totalCases,
+      name: tc.name,
+      exportName: tc.exportName
+    }) + '\\n');
+
     let fn = targetMod[tc.exportName];
     if (!fn && targetMod.default && typeof targetMod.default === 'object') {
       fn = targetMod.default[tc.exportName];
@@ -136,6 +147,15 @@ async function run() {
         status: 'not_callable',
         error: 'Export is not a callable function'
       });
+      origStderrWrite('__SOFTSCOPE_EVENT__' + JSON.stringify({
+        type: 'done',
+        index: t + 1,
+        total: totalCases,
+        name: tc.name,
+        exportName: tc.exportName,
+        status: 'not_callable',
+        error: 'Export is not a callable function'
+      }) + '\\n');
       continue;
     }
 
@@ -160,6 +180,15 @@ async function run() {
         status: 'error',
         error: warmupErr.message || String(warmupErr)
       });
+      origStderrWrite('__SOFTSCOPE_EVENT__' + JSON.stringify({
+        type: 'done',
+        index: t + 1,
+        total: totalCases,
+        name: tc.name,
+        exportName: tc.exportName,
+        status: 'error',
+        error: warmupErr.message || String(warmupErr)
+      }) + '\\n');
       continue;
     }
 
@@ -316,6 +345,20 @@ async function run() {
       cliffs,
       crashes
     });
+
+    origStderrWrite('__SOFTSCOPE_EVENT__' + JSON.stringify({
+      type: 'done',
+      index: t + 1,
+      total: totalCases,
+      name: tc.name,
+      exportName: tc.exportName,
+      status: 'ok',
+      opsPerSec,
+      bytesPerOp,
+      avgMs,
+      cliffs: cliffs.length,
+      crashes: crashes.length
+    }) + '\\n');
   }
 
   let callEdges = [];
@@ -475,6 +518,12 @@ export async function executeAutoBenchSingle(targetFile, options, pickedFunction
     };
   });
 
+  const targetProjectRoot = findProjectRoot(targetFile, options.projectRoot);
+
+  if (options.sequential) {
+    return executeAutoBenchSequential(targetFile, options, testCases, analysis, targetProjectRoot);
+  }
+
   // 4. Generate and run temporary harness script
   const iterations = options.iterations || 10000;
   const tmpRunnerPath = path.join(
@@ -491,7 +540,6 @@ export async function executeAutoBenchSingle(targetFile, options, pickedFunction
 
   let exitCode = 0;
 
-  const targetProjectRoot = findProjectRoot(targetFile, options.projectRoot);
   const registerPath = path.resolve(__dirname, '..', 'loader', 'register.js');
   const registerUrl = pathToFileURL(registerPath).href;
 
@@ -519,6 +567,13 @@ export async function executeAutoBenchSingle(targetFile, options, pickedFunction
     })
   };
 
+  const progressReporter = createProgressReporter({
+    total: testCases.length,
+    isTTY: Boolean(process.stderr && process.stderr.isTTY),
+    enabled: options.progress !== false && !options.json && !options.ai && !options.md,
+    sequential: false
+  });
+
   try {
     const runner = findTsRunner(targetFile, targetProjectRoot);
     const child = spawn(runner.executable, [...runner.args, tmpRunnerPath], {
@@ -530,8 +585,27 @@ export async function executeAutoBenchSingle(targetFile, options, pickedFunction
     activeBenchChild = child;
 
     let stderrOutput = '';
+    let stderrBuffer = '';
+
     child.stderr.on('data', chunk => {
-      stderrOutput += chunk.toString('utf-8');
+      stderrBuffer += chunk.toString('utf-8');
+      const lines = stderrBuffer.split('\n');
+      stderrBuffer = lines.pop();
+
+      for (const line of lines) {
+        if (line.startsWith('__SOFTSCOPE_EVENT__')) {
+          try {
+            const ev = JSON.parse(line.slice('__SOFTSCOPE_EVENT__'.length));
+            if (ev.type === 'start') {
+              progressReporter.onStart(ev.index, ev.name);
+            } else if (ev.type === 'done') {
+              progressReporter.onDone(ev.index, ev.name, ev);
+            }
+          } catch {}
+        } else {
+          stderrOutput += line + '\n';
+        }
+      }
     });
 
     exitCode = await new Promise(resolve => {
@@ -545,10 +619,20 @@ export async function executeAutoBenchSingle(targetFile, options, pickedFunction
       });
     });
 
+    if (stderrBuffer && stderrBuffer.startsWith('__SOFTSCOPE_EVENT__')) {
+      try {
+        const ev = JSON.parse(stderrBuffer.slice('__SOFTSCOPE_EVENT__'.length));
+        if (ev.type === 'done') progressReporter.onDone(ev.index, ev.name, ev);
+      } catch {}
+    } else if (stderrBuffer) {
+      stderrOutput += stderrBuffer;
+    }
+
     if (exitCode !== 0 && stderrOutput) {
       process.stderr.write(stderrOutput);
     }
   } finally {
+    progressReporter.finish();
     try {
       if (fs.existsSync(tmpRunnerPath)) {
         fs.unlinkSync(tmpRunnerPath);
@@ -585,6 +669,209 @@ export async function executeAutoBenchSingle(targetFile, options, pickedFunction
   const fnResults = Array.isArray(parsedPayload) ? parsedPayload : (parsedPayload.functions || []);
   const callEdges = parsedPayload.callEdges || [];
 
+  return finishAndRenderAutoBench(targetFile, options, fnResults, callEdges, iterations);
+}
+
+/**
+ * Executes candidate functions sequentially one-by-one with isolated subprocesses and timeout watchdog.
+ */
+async function executeAutoBenchSequential(targetFile, options, testCases, analysis, targetProjectRoot) {
+  const timeoutMs = options.timeout || 5000;
+  const iterations = options.iterations || 10000;
+  const registerPath = path.resolve(__dirname, '..', 'loader', 'register.js');
+  const registerUrl = pathToFileURL(registerPath).href;
+
+  const existingNodeOptions = process.env.NODE_OPTIONS || '';
+  const alreadyImported = existingNodeOptions.includes('register.js') || existingNodeOptions.includes(registerUrl);
+  let nodeOptions = alreadyImported
+    ? existingNodeOptions
+    : existingNodeOptions
+      ? `${existingNodeOptions} --import=${registerUrl}`
+      : `--import=${registerUrl}`;
+
+  if (!nodeOptions.includes('--expose-gc')) {
+    nodeOptions = `--expose-gc ${nodeOptions}`.trim();
+  }
+
+  const childEnv = {
+    ...process.env,
+    NODE_OPTIONS: nodeOptions,
+    SOFTSCOPE_CONFIG: JSON.stringify({
+      ...options,
+      projectRoot: targetProjectRoot,
+      include: options.include || [],
+      exclude: options.exclude || [],
+      includeNodeModules: Boolean(options.includeNodeModules)
+    })
+  };
+
+  const progressReporter = createProgressReporter({
+    total: testCases.length,
+    isTTY: Boolean(process.stderr && process.stderr.isTTY),
+    enabled: options.progress !== false && !options.json && !options.ai && !options.md,
+    sequential: true
+  });
+
+  if (!options.json && !options.ai && !options.md) {
+    console.log(`\n\x1b[1;36m▶ Sequential Auto-Bench\x1b[0m \x1b[2m(${testCases.length} functions, ${timeoutMs}ms timeout per function)\x1b[0m\n`);
+  }
+
+  const fnResults = [];
+  const allCallEdges = [];
+
+  for (let i = 0; i < testCases.length; i++) {
+    const tc = testCases[i];
+    progressReporter.onStart(i + 1, tc.name);
+
+    const tmpRunnerPath = path.join(
+      os.tmpdir(),
+      `softscope-autobench-seq-${process.pid}-${i}-${Date.now()}.mjs`
+    );
+    const tmpResultsPath = path.join(
+      os.tmpdir(),
+      `softscope-autobench-seq-res-${process.pid}-${i}-${Date.now()}.json`
+    );
+
+    const runnerScript = generateRunnerScript(targetFile, [tc], iterations, tmpResultsPath);
+    fs.writeFileSync(tmpRunnerPath, runnerScript, 'utf-8');
+
+    let exitCode = 0;
+    let timedOut = false;
+    let stderrOutput = '';
+    let runnerChild = null;
+
+    try {
+      const runner = findTsRunner(targetFile, targetProjectRoot);
+      runnerChild = spawn(runner.executable, [...runner.args, tmpRunnerPath], {
+        cwd: targetProjectRoot,
+        env: childEnv,
+        stdio: ['ignore', 'ignore', 'pipe']
+      });
+
+      activeBenchChild = runnerChild;
+
+      const timer = setTimeout(() => {
+        timedOut = true;
+        try {
+          runnerChild.kill('SIGKILL');
+        } catch {}
+      }, timeoutMs);
+
+      runnerChild.stderr.on('data', chunk => {
+        const text = chunk.toString('utf-8');
+        const lines = text.split('\n');
+        for (const line of lines) {
+          if (!line.startsWith('__SOFTSCOPE_EVENT__')) {
+            stderrOutput += line + '\n';
+          }
+        }
+      });
+
+      exitCode = await new Promise(resolve => {
+        runnerChild.on('close', code => {
+          clearTimeout(timer);
+          if (activeBenchChild === runnerChild) activeBenchChild = null;
+          resolve(code || 0);
+        });
+        runnerChild.on('error', () => {
+          clearTimeout(timer);
+          if (activeBenchChild === runnerChild) activeBenchChild = null;
+          resolve(1);
+        });
+      });
+    } finally {
+      try {
+        if (fs.existsSync(tmpRunnerPath)) fs.unlinkSync(tmpRunnerPath);
+      } catch {}
+    }
+
+    if (timedOut) {
+      const timeoutRes = {
+        name: tc.name,
+        exportName: tc.exportName,
+        status: 'timeout',
+        error: `Execution timed out (> ${timeoutMs}ms)`,
+        iterations: 0,
+        totalTimeMs: timeoutMs,
+        opsPerSec: 0,
+        bytesPerOp: 0,
+        gcCount: 0,
+        gcTimeMs: 0,
+        avgMs: timeoutMs,
+        minMs: timeoutMs,
+        maxMs: timeoutMs,
+        baselineSeed: tc.baselineSeed,
+        cliffs: [],
+        crashes: []
+      };
+      fnResults.push(timeoutRes);
+      progressReporter.onDone(i + 1, tc.name, { status: 'timeout', timedOut: true });
+    } else if (exitCode !== 0 || !fs.existsSync(tmpResultsPath)) {
+      const errRes = {
+        name: tc.name,
+        exportName: tc.exportName,
+        status: 'error',
+        error: stderrOutput.trim() || 'Execution failed',
+        iterations: 0,
+        totalTimeMs: 0,
+        opsPerSec: 0,
+        bytesPerOp: 0,
+        gcCount: 0,
+        gcTimeMs: 0,
+        avgMs: 0,
+        minMs: 0,
+        maxMs: 0,
+        baselineSeed: tc.baselineSeed,
+        cliffs: [],
+        crashes: []
+      };
+      fnResults.push(errRes);
+      progressReporter.onDone(i + 1, tc.name, { status: 'error', error: stderrOutput.trim() });
+    } else {
+      try {
+        const rawData = fs.readFileSync(tmpResultsPath, 'utf-8');
+        const parsed = JSON.parse(rawData);
+        const fns = parsed.functions || [];
+        if (fns.length > 0) {
+          const fn = fns[0];
+          fnResults.push(fn);
+          progressReporter.onDone(i + 1, tc.name, {
+            status: fn.status,
+            opsPerSec: fn.opsPerSec,
+            bytesPerOp: fn.bytesPerOp,
+            avgMs: fn.avgMs,
+            cliffs: fn.cliffs ? fn.cliffs.length : 0,
+            crashes: fn.crashes ? fn.crashes.length : 0
+          });
+        }
+        if (parsed.callEdges) {
+          allCallEdges.push(...parsed.callEdges);
+        }
+      } catch (err) {
+        fnResults.push({
+          name: tc.name,
+          exportName: tc.exportName,
+          status: 'error',
+          error: err.message
+        });
+        progressReporter.onDone(i + 1, tc.name, { status: 'error', error: err.message });
+      } finally {
+        try {
+          if (fs.existsSync(tmpResultsPath)) fs.unlinkSync(tmpResultsPath);
+        } catch {}
+      }
+    }
+  }
+
+  progressReporter.finish();
+
+  return finishAndRenderAutoBench(targetFile, options, fnResults, allCallEdges, iterations);
+}
+
+/**
+ * Post-processes and renders the final auto-bench report (Terminal, Markdown, AI, or JSON).
+ */
+export async function finishAndRenderAutoBench(targetFile, options, fnResults, callEdges, iterations) {
   // Parse error locations and generate source code frames for unhandled crashes
   for (const fn of fnResults) {
     if (fn.crashes) {
@@ -814,7 +1101,8 @@ export async function runAutoBench(options) {
         fuzz: options.fuzz !== false,
         diff: Boolean(options.diff),
         changed: Boolean(options.changed),
-        all: Boolean(options.all)
+        all: Boolean(options.all),
+        sequential: Boolean(options.sequential)
       }),
       onToggleFuzz: () => {
         options.fuzz = options.fuzz === false ? true : false;
@@ -841,6 +1129,10 @@ export async function runAutoBench(options) {
       onToggleAll: () => {
         options.all = !options.all;
         return `Toggled all functions: ${options.all ? '\x1b[32mON\x1b[0m (including unexported functions)' : '\x1b[33mOFF\x1b[0m (exported only)'}`;
+      },
+      onToggleSequential: () => {
+        options.sequential = !options.sequential;
+        return `Toggled sequential execution: ${options.sequential ? '\x1b[32mON\x1b[0m (isolated function-by-function)' : '\x1b[33mOFF\x1b[0m (batch mode)'}`;
       },
       onPick: process.stdin.isTTY ? async () => {
         try {

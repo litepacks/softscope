@@ -72,6 +72,9 @@ export function parseCliArgs(rawArgs, cwd = process.cwd()) {
     changed: Boolean(rcConfig.changed),
     staged: Boolean(rcConfig.staged),
     since: rcConfig.since || null,
+    sequential: Boolean(rcConfig.sequential),
+    progress: typeof rcConfig.progress === 'boolean' ? rcConfig.progress : true,
+    timeout: typeof rcConfig.timeout === 'number' ? rcConfig.timeout : 5000,
     command: []
   };
 
@@ -223,6 +226,21 @@ export function parseCliArgs(rawArgs, cwd = process.cwd()) {
       i++;
     } else if (arg.startsWith('--match=')) {
       options.filter = arg.slice('--match='.length);
+      i++;
+    } else if (arg === '--sequential' || arg === '-s') {
+      options.sequential = true;
+      i++;
+    } else if (arg === '--progress') {
+      options.progress = true;
+      i++;
+    } else if (arg === '--no-progress') {
+      options.progress = false;
+      i++;
+    } else if (arg === '--timeout') {
+      options.timeout = parseInt(rawArgs[i + 1], 10) || 5000;
+      i += 2;
+    } else if (arg.startsWith('--timeout=')) {
+      options.timeout = parseInt(arg.slice('--timeout='.length), 10) || 5000;
       i++;
     } else if (arg === '--watch' || arg === '-w') {
       options.watch = true;

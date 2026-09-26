@@ -658,6 +658,9 @@ Options:
   --clear                  Clear recorded crash history
   --fuzz                   Enable boundary/edge-case fuzzing during auto-bench (default: true)
   --no-fuzz                Disable edge-case fuzzing during auto-bench
+  --sequential, -s         Run auto-bench sequentially function-by-function with timeout isolation
+  --timeout <ms>           Per-function execution timeout for sequential mode (default: 5000ms)
+  --no-progress            Disable live progress indicator during auto-bench
   --iterations <n>         Number of iterations per function in auto-bench (default: 10000)
   --all                    Benchmark all top-level functions (including unexported ones)
   --save-baseline <file>   Save execution metrics as baseline JSON profile

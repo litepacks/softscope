@@ -122,14 +122,14 @@ export function inferParamValue(param) {
   }
 
   const name = (param.name || '').toLowerCase();
-  if (/num|count|idx|index|len|size|max|min|limit|offset|a|b|x|y|amount|sum|val/i.test(name)) {
+  if (/arr|list|items|elements|data|rows|values|queries/i.test(name)) {
+    return [1, 2, 3];
+  }
+  if (/^(a|b|x|y|n|i|j|k)$/i.test(name) || /num|count|idx|index|len|size|max|min|limit|offset|amount|sum|val/i.test(name)) {
     return 10;
   }
   if (/str|text|name|key|word|query|msg|message|title|sql/i.test(name)) {
     return 'benchmark';
-  }
-  if (/arr|list|items|elements|data|rows/i.test(name)) {
-    return [1, 2, 3];
   }
   if (/obj|options|opts|config|settings|props|ctx/i.test(name)) {
     return {};
@@ -152,10 +152,10 @@ export function generateMutations(val) {
     return [
       { label: 'zero (0)', val: 0 },
       { label: 'negative (-1)', val: -1 },
-      { label: 'MAX_SAFE_INTEGER', val: Number.MAX_SAFE_INTEGER },
+      { label: 'boundary (1000)', val: 1000 },
+      { label: 'fraction (0.5)', val: 0.5 },
       { label: 'NaN', val: NaN },
-      { label: 'Infinity', val: Infinity },
-      { label: 'large number (1M)', val: 1000000 }
+      { label: 'Infinity', val: Infinity }
     ];
   }
 
