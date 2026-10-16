@@ -2,6 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { compareTestMetrics } from './compare.js';
 
+function writeDirect(msg = '') {
+  if (typeof process !== 'undefined' && process.stdout && typeof process.stdout.write === 'function') {
+    process.stdout.write(msg + '\n');
+  } else {
+    console.log(msg);
+  }
+}
+
 /**
  * Custom Vitest Reporter for aggregating and printing Softscope performance metrics.
  * Runs on the main Node.js process and receives serialized task.meta from worker threads.
@@ -20,30 +28,74 @@ export class SoftscopeVitestReporter {
     this.options = options;
     this.collectedTests = [];
     this.failedOrCancelledCount = 0;
+    this._finalized = false;
   }
 
   onWatcherRerun() {
-    // Reset state in watch mode to avoid mixing runs
     this.collectedTests = [];
     this.failedOrCancelledCount = 0;
+    this._finalized = false;
   }
 
   onTestRunStart() {
     this.collectedTests = [];
     this.failedOrCancelledCount = 0;
+    this._finalized = false;
   }
 
+  // Intercept real-time RPC task updates from worker threads / child processes
+  onTaskUpdate(packs) {
+    if (!Array.isArray(packs)) return;
+    for (const pack of packs) {
+      if (!Array.isArray(pack)) continue;
+      const [id, result, meta] = pack;
+      const softscopeData = meta?.softscope;
+      if (softscopeData && Array.isArray(softscopeData.metrics) && softscopeData.metrics.length > 0) {
+        if (!this.collectedTests.some(t => t.sessionId === softscopeData.sessionId)) {
+          this.collectedTests.push(softscopeData);
+        }
+      }
+    }
+  }
+
+  // Vitest 2.x and 3.x per-test hook
+  onTestCaseResult(testCase) {
+    const meta = typeof testCase?.meta === 'function' ? testCase.meta() : testCase?.meta;
+    const softscopeData = meta?.softscope;
+    if (softscopeData && Array.isArray(softscopeData.metrics) && softscopeData.metrics.length > 0) {
+      if (!this.collectedTests.some(t => t.sessionId === softscopeData.sessionId)) {
+        this.collectedTests.push(softscopeData);
+      }
+    }
+  }
+
+  // Vitest 3+ final run hook
+  onTestRunEnd(testModules = []) {
+    this._finalizeRun(testModules);
+  }
+
+  // Vitest 1.x / 2.x legacy final run hook
   onFinished(files = []) {
-    // Flatten all test tasks from files and suites
+    this._finalizeRun(files);
+  }
+
+  _finalizeRun(modulesOrFiles = []) {
+    if (this._finalized) return;
+    this._finalized = true;
+
+    // Flatten all test tasks from files, modules, and suites
     const allTasks = [];
-    extractTestTasks(files, allTasks);
+    extractTestTasks(modulesOrFiles, allTasks);
 
     for (const task of allTasks) {
-      const softscopeData = task.meta?.softscope;
+      const meta = typeof task?.meta === 'function' ? task.meta() : task?.meta;
+      const softscopeData = meta?.softscope;
+
       if (softscopeData && Array.isArray(softscopeData.metrics) && softscopeData.metrics.length > 0) {
-        this.collectedTests.push(softscopeData);
-      } else if (task.result?.state === 'fail') {
-        // Track failed or crashed tasks without attributing artificial zero metrics
+        if (!this.collectedTests.some(t => t.sessionId === softscopeData.sessionId)) {
+          this.collectedTests.push(softscopeData);
+        }
+      } else if (task.result?.state === 'fail' || task.state === 'fail') {
         this.failedOrCancelledCount++;
       }
     }
@@ -66,7 +118,7 @@ export class SoftscopeVitestReporter {
   printTerminalSummary() {
     if (this.collectedTests.length === 0) {
       if (this.failedOrCancelledCount > 0) {
-        console.log(`\n⚡ \x1b[33mSoftscope:\x1b[0m No performance metrics captured (${this.failedOrCancelledCount} test(s) failed or cancelled).`);
+        writeDirect(`\n⚡ \x1b[33mSoftscope:\x1b[0m No performance metrics captured (${this.failedOrCancelledCount} test(s) failed or cancelled).`);
       }
       return;
     }
@@ -87,19 +139,19 @@ export class SoftscopeVitestReporter {
       }
     }
 
-    console.log('\n⚡ \x1b[1mSoftscope Test Performance Summary\x1b[0m');
-    console.log('─'.repeat(78));
-    console.log(
+    writeDirect('\n⚡ \x1b[1mSoftscope Test Performance Summary\x1b[0m');
+    writeDirect('─'.repeat(78));
+    writeDirect(
       'Test'.padEnd(38) +
       'Function'.padEnd(24) +
       'Calls'.padStart(6) +
       'Total (ms)'.padStart(12) +
       'Avg (ms)'.padStart(10)
     );
-    console.log('─'.repeat(78));
+    writeDirect('─'.repeat(78));
 
     for (const r of rows) {
-      console.log(
+      writeDirect(
         r.test.padEnd(38) +
         r.fn.padEnd(24) +
         r.calls.padStart(6) +
@@ -108,8 +160,8 @@ export class SoftscopeVitestReporter {
       );
     }
 
-    console.log('─'.repeat(78));
-    console.log('\x1b[2m* Function times are inclusive and may overlap across nested calls.\x1b[0m');
+    writeDirect('─'.repeat(78));
+    writeDirect('\x1b[2m* Function times are inclusive and may overlap across nested calls.\x1b[0m');
 
     // Run baseline comparison if baseline path was provided
     if (this.options.baseline) {
@@ -124,31 +176,31 @@ export class SoftscopeVitestReporter {
     });
 
     if (report.missingBaseline) {
-      console.log(`\n\x1b[33m[softscope baseline]\x1b[0m Baseline file not found: "${this.options.baseline}". Run with saveBaseline to generate.`);
+      writeDirect(`\n\x1b[33m[softscope baseline]\x1b[0m Baseline file not found: "${this.options.baseline}". Run with saveBaseline to generate.`);
       return;
     }
 
     if (report.envWarnings && report.envWarnings.length > 0) {
       for (const w of report.envWarnings) {
-        console.log(`\x1b[33m[softscope baseline warning]\x1b[0m ${w}`);
+        writeDirect(`\x1b[33m[softscope baseline warning]\x1b[0m ${w}`);
       }
     }
 
     if (report.regressions.length > 0) {
-      console.log(`\n⚠️  \x1b[1;33mSoftscope Performance Regressions Detected\x1b[0m (Baseline: ${this.options.baseline})`);
-      console.log('─'.repeat(84));
-      console.log(
+      writeDirect(`\n⚠️  \x1b[1;33mSoftscope Performance Regressions Detected\x1b[0m (Baseline: ${this.options.baseline})`);
+      writeDirect('─'.repeat(84));
+      writeDirect(
         'Test'.padEnd(34) +
         'Function'.padEnd(20) +
         'Baseline'.padStart(10) +
         'Current'.padStart(10) +
         'Delta'.padStart(18)
       );
-      console.log('─'.repeat(84));
+      writeDirect('─'.repeat(84));
 
       for (const reg of report.regressions) {
         const deltaStr = `+${reg.deltaPct}% (+${reg.deltaMs}ms)`;
-        console.log(
+        writeDirect(
           truncate(reg.testName, 32).padEnd(34) +
           truncate(reg.name, 18).padEnd(20) +
           `${reg.baselineDurationMs.toFixed(2)}ms`.padStart(10) +
@@ -156,10 +208,10 @@ export class SoftscopeVitestReporter {
           `\x1b[31m${deltaStr.padStart(18)}\x1b[0m`
         );
       }
-      console.log('─'.repeat(84));
-      console.log(`\x1b[2m* Threshold: ${report.thresholdPct}% (min +${report.minAbsoluteDeltaMs}ms). Regressions are reported as warnings only.\x1b[0m`);
+      writeDirect('─'.repeat(84));
+      writeDirect(`\x1b[2m* Threshold: ${report.thresholdPct}% (min +${report.minAbsoluteDeltaMs}ms). Regressions are reported as warnings only.\x1b[0m`);
     } else if (report.matches.length > 0) {
-      console.log(`\n\x1b[32m✔ Softscope:\x1b[0m All ${report.matches.length} measured function(s) within baseline thresholds.`);
+      writeDirect(`\n\x1b[32m✔ Softscope:\x1b[0m All ${report.matches.length} measured function(s) within baseline thresholds.`);
     }
   }
 
@@ -180,7 +232,7 @@ export class SoftscopeVitestReporter {
     };
 
     writeAtomic(targetFile, JSON.stringify(baselinePayload, null, 2));
-    console.log(`\x1b[32m[softscope]\x1b[0m Saved baseline to ${path.resolve(targetFile)}`);
+    writeDirect(`\x1b[32m[softscope]\x1b[0m Saved baseline to ${path.resolve(targetFile)}`);
   }
 
   writeJsonReport() {
@@ -220,7 +272,7 @@ export class SoftscopeVitestReporter {
     };
 
     writeAtomic(targetFile, JSON.stringify(payload, null, 2));
-    console.log(`\x1b[32m[softscope]\x1b[0m Saved performance JSON report to ${path.resolve(targetFile)}`);
+    writeDirect(`\x1b[32m[softscope]\x1b[0m Saved performance JSON report to ${path.resolve(targetFile)}`);
   }
 }
 
@@ -228,12 +280,21 @@ function extractTestTasks(tasksOrFiles, result) {
   if (!Array.isArray(tasksOrFiles)) return;
   for (const item of tasksOrFiles) {
     if (!item) continue;
-    // In Vitest, tasks inside a file can be accessed via item.tasks
     if (item.type === 'test' || item.type === 'custom') {
       result.push(item);
     }
     if (Array.isArray(item.tasks)) {
       extractTestTasks(item.tasks, result);
+    }
+    if (Array.isArray(item.children)) {
+      extractTestTasks(item.children, result);
+    } else if (item.children && typeof item.children.allTests === 'function') {
+      try {
+        const tests = item.children.allTests();
+        if (Array.isArray(tests)) {
+          extractTestTasks(tests, result);
+        }
+      } catch {}
     }
   }
 }

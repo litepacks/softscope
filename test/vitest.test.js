@@ -48,8 +48,9 @@ test('Vitest Plugin: preserves user reporters and setupFiles while configuring r
   // Check runner configured
   assert.ok(userConfig.test.runner.endsWith('runner.js'));
 
-  // Check setupFiles preserved
-  assert.deepEqual(userConfig.test.setupFiles, ['./custom-setup.ts']);
+  // Check setupFiles preserved + softscope setup attached
+  assert.ok(userConfig.test.setupFiles.includes('./custom-setup.ts'));
+  assert.ok(userConfig.test.setupFiles.some(f => f.endsWith('setup.js')));
 });
 
 test('Vitest Plugin: gracefully falls back to setupFiles when user already has custom runner', () => {
@@ -837,7 +838,12 @@ function checkoutCart(cart) {
 test('Complex Nesting: Reporter formats and prints multi-level nested function breakdown cleanly', () => {
   const printedLines = [];
   const origLog = console.log;
+  const origWrite = process.stdout.write;
   console.log = (...args) => printedLines.push(args.join(' '));
+  process.stdout.write = (str) => {
+    printedLines.push(typeof str === 'string' ? str : String(str));
+    return true;
+  };
 
   try {
     const reporter = new SoftscopeVitestReporter({ silent: false });
@@ -863,6 +869,62 @@ test('Complex Nesting: Reporter formats and prints multi-level nested function b
     assert.ok(output.includes('Function times are inclusive and may overlap across nested calls'));
   } finally {
     console.log = origLog;
+    process.stdout.write = origWrite;
   }
+});
+
+test('Vitest Reporter: onTaskUpdate intercepts RPC task packets in real-time', () => {
+  const reporter = new SoftscopeVitestReporter({ silent: true });
+
+  const mockPacks = [
+    [
+      'test-1',
+      { state: 'pass' },
+      {
+        softscope: {
+          sessionId: 'sess_1',
+          testName: 'real-time rpc test',
+          file: 'tests/unit.test.js',
+          metrics: [
+            { id: 10, name: 'processRecord', calls: 5, totalDurationMs: 4.2, avgDurationMs: 0.84 }
+          ]
+        }
+      }
+    ]
+  ];
+
+  reporter.onTaskUpdate(mockPacks);
+  assert.equal(reporter.collectedTests.length, 1);
+  assert.equal(reporter.collectedTests[0].testName, 'real-time rpc test');
+  assert.equal(reporter.collectedTests[0].metrics[0].calls, 5);
+});
+
+test('Vitest Reporter: onTestRunEnd extracts tasks from Vitest 3 TestModule.children', () => {
+  const reporter = new SoftscopeVitestReporter({ silent: true });
+
+  const mockTestModules = [
+    {
+      filepath: '/app/tests/service.test.ts',
+      children: [
+        {
+          type: 'test',
+          name: 'vitest 3 service test',
+          meta: () => ({
+            softscope: {
+              sessionId: 'sess_v3_1',
+              testName: 'vitest 3 service test',
+              file: 'service.test.ts',
+              metrics: [{ id: 99, name: 'executeService', calls: 2, totalDurationMs: 1.5, avgDurationMs: 0.75 }]
+            }
+          })
+        }
+      ]
+    }
+  ];
+
+  reporter.onTestRunEnd(mockTestModules);
+  assert.equal(reporter.collectedTests.length, 1);
+  assert.equal(reporter.collectedTests[0].testName, 'vitest 3 service test');
+  assert.equal(reporter.collectedTests[0].metrics[0].name, 'executeService');
 });
 

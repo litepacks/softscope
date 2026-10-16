@@ -51,6 +51,15 @@ export function softscopeVitest(options = {}) {
     return filter;
   }
 
+  const reporterInstance = new SoftscopeVitestReporter({
+    json: options.json,
+    baseline: options.baseline,
+    saveBaseline: options.saveBaseline,
+    threshold: options.threshold,
+    minAbsoluteDeltaMs: options.minAbsoluteDeltaMs,
+    silent: options.silent
+  });
+
   return {
     name: 'softscope:vitest',
     enforce: 'pre',
@@ -76,37 +85,58 @@ export function softscopeVitest(options = {}) {
         ? (Array.isArray(userConfig.test.reporters) ? [...userConfig.test.reporters] : [userConfig.test.reporters])
         : ['default'];
 
-      const reporterInstance = new SoftscopeVitestReporter({
-        json: options.json,
-        baseline: options.baseline,
-        saveBaseline: options.saveBaseline,
-        threshold: options.threshold,
-        minAbsoluteDeltaMs: options.minAbsoluteDeltaMs,
-        silent: options.silent
-      });
+      if (!existingReporters.includes(reporterInstance)) {
+        existingReporters.push(reporterInstance);
+      }
+      userConfig.test.reporters = existingReporters;
 
-      userConfig.test.reporters = [...existingReporters, reporterInstance];
+      // 3. Configure setupFiles and test runner
+      const existingSetup = userConfig.test.setupFiles
+        ? (Array.isArray(userConfig.test.setupFiles) ? [...userConfig.test.setupFiles] : [userConfig.test.setupFiles])
+        : [];
 
-      // 3. Configure test runner or setupFiles
-      // If user has not specified a custom runner, we attach SoftscopeTestRunner
+      if (!existingSetup.includes(SETUP_PATH)) {
+        existingSetup.push(SETUP_PATH);
+      }
+      userConfig.test.setupFiles = existingSetup;
+
       if (!userConfig.test.runner) {
         userConfig.test.runner = RUNNER_PATH;
-      } else {
-        // User already has a custom runner; preserve it and fallback to setupFiles
-        console.warn(
-          `[softscope] Preserving custom test runner: "${userConfig.test.runner}". ` +
-          'Attaching softscope setup hook to setupFiles.'
-        );
-        const existingSetup = userConfig.test.setupFiles
-          ? (Array.isArray(userConfig.test.setupFiles) ? [...userConfig.test.setupFiles] : [userConfig.test.setupFiles])
-          : [];
-        userConfig.test.setupFiles = [...existingSetup, SETUP_PATH];
       }
+
+      return {
+        test: {
+          runner: userConfig.test.runner,
+          setupFiles: existingSetup,
+          reporters: userConfig.test.reporters
+        }
+      };
     },
 
     configResolved(resolvedConfig) {
       projectRoot = resolvedConfig.root ? path.resolve(resolvedConfig.root) : process.cwd();
       filter = null;
+
+      // Ensure reporter is registered in resolvedConfig in case CLI flags stripped it
+      if (resolvedConfig.test) {
+        if (!Array.isArray(resolvedConfig.test.reporters)) {
+          resolvedConfig.test.reporters = resolvedConfig.test.reporters ? [resolvedConfig.test.reporters] : ['default'];
+        }
+        if (!resolvedConfig.test.reporters.includes(reporterInstance)) {
+          resolvedConfig.test.reporters.push(reporterInstance);
+        }
+      }
+    },
+
+    configureVitest(context) {
+      if (context && context.vitest && context.vitest.config) {
+        const vConfig = context.vitest.config;
+        if (Array.isArray(vConfig.reporters)) {
+          if (!vConfig.reporters.includes(reporterInstance)) {
+            vConfig.reporters.push(reporterInstance);
+          }
+        }
+      }
     },
 
     resolveId(id) {
