@@ -4,7 +4,8 @@ description: >-
   Use this skill to profile, benchmark, or observe JavaScript/TypeScript files, micro-benchmarks,
   test suites, or application scripts using Softscope. Provides procedures for measuring function
   call frequencies, total and self execution durations, caller-callee call graphs, runtime reach,
-  and generating GitHub Flavored Markdown (--md), terminal tables, or versioned JSON reports.
+  Vitest native test-level profiling (softscope/vitest), and generating GitHub Flavored Markdown (--md),
+  terminal tables, or versioned JSON reports.
 ---
 
 # Softscope Profiling & Observability Skill
@@ -168,13 +169,47 @@ export default defineConfig({
 
 ---
 
-## 5. Verification & Testing
+## 5. Vitest Integration (`softscope/vitest`)
+
+Softscope integrates natively with [Vitest](https://vitest.dev) to attribute function-level performance metrics (call frequency, inclusive total duration, and average latency) to individual tests without modifying existing application code or wrapping tests in manual `measure()` APIs.
+
+```typescript
+// vitest.config.ts
+import { defineConfig } from 'vitest/config';
+import { softscopeVitest } from 'softscope/vitest';
+
+export default defineConfig({
+  plugins: [
+    softscopeVitest({
+      // json: 'softscope-report.json',   // Export atomic JSON report
+      // baseline: 'baseline.json',       // Compare against saved baseline
+      // saveBaseline: 'baseline.json',   // Save current run as baseline
+      // threshold: 10,                   // Degradation threshold percentage (default: 10%)
+      // minAbsoluteDeltaMs: 1.0,         // Minimum delta in ms to trigger regression warning (default: 1.0ms)
+    })
+  ]
+});
+```
+
+### Key Vitest Integration Mechanics:
+- **Zero test code changes**: Existing instrumented function calls are automatically detected and captured inside standard Vitest tests.
+- **Strict Async Isolation**: Uses Node's `AsyncLocalStorage` inside a custom `TestRunner` (`SoftscopeTestRunner`) so `test.concurrent` tests and nested `await` operations never leak context.
+- **Deep Nested Function Tracking**: Recursively measures all child callees, async sub-tasks, and branches (including error-throwing child functions caught by parent try/catch blocks).
+- **Atomic Reporter & Baseline Comparison**: Collects `task.meta.softscope` across worker threads, prints a formatted terminal summary, and supports atomic JSON and baseline regression comparisons.
+- **Compatibility**: Supports Vitest `>= 1.0.0` (1.x, 2.x, 3.x+) on Node `>= 20.6.0` across `threads`, `forks`, and `vmThreads` pools. (Vitest Browser Mode is not supported due to lack of `node:async_hooks` in real browsers).
+
+---
+
+## 6. Verification & Testing
 
 Always verify Softscope after making code or instrumentation changes:
 
 ```bash
-# Run the test suite (36 unit, CLI integration, and Vite plugin tests)
+# Run the test suite (unit, CLI integration, Vite, and Vitest tests)
 npm test
+
+# Run Vitest integration tests specifically
+node --test test/vitest.test.js
 
 # Run the 1,000,000 function call overhead benchmark
 npm run bench

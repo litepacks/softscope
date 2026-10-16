@@ -59,6 +59,13 @@ softscope/
 │   │   ├── index.js          # Vite plugin factory (virtual module resolution, HTML injection, transform)
 │   │   ├── client.js         # Browser client singleton (window.__softscope API, snapshot, reset)
 │   │   └── overlay.js        # Zero-dependency in-browser floating HUD badge & ShadowRoot diagnostics drawer
+│   ├── vitest/
+│   │   ├── index.js          # Vitest plugin factory (softscopeVitest), reporter/runner wiring
+│   │   ├── runner.js         # Custom TestRunner (SoftscopeTestRunner) with ALS-isolated test execution
+│   │   ├── context.js        # Node AsyncLocalStorage session coordinator & scoped metrics collector
+│   │   ├── reporter.js       # Custom reporter (SoftscopeVitestReporter) for terminal and atomic JSON
+│   │   ├── compare.js        # Performance baseline comparator with dual threshold gating
+│   │   └── setup.js          # Optional setupFiles hook fallback for non-custom-runner setups
 │   ├── autobench/
 │   │   ├── analyze.js        # AST candidate function and parameter analyzer
 │   │   ├── seeds.js          # Seed synthesis, captured seed loader, and boundary mutation fuzzer
@@ -83,7 +90,8 @@ softscope/
 │   ├── tui.test.js           # Interactive TUI state machine and rendering tests
 │   ├── parse.test.js         # OXC parsing & anonymous function naming heuristics tests
 │   ├── transform.test.js     # Surgical AST code rewriting & semantics preservation tests
-│   └── vite.test.js          # Vite plugin hooks, virtual module, HTML injection & browser client tests
+│   ├── vite.test.js          # Vite plugin hooks, virtual module, HTML injection & browser client tests
+│   └── vitest.test.js        # Vitest plugin, ALS isolation, concurrent tests, reporter & baseline tests
 ├── fixtures/                 # Test sample applications (simple, error, autobench, npm-script)
 ├── bench/
 │   ├── run.js                # Micro-benchmark comparing baseline vs Softscope instrumentation overhead

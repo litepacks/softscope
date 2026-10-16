@@ -427,6 +427,62 @@ __softscope.toggleOverlay();
 
 ---
 
+## Vitest Integration (`softscope/vitest`)
+
+Softscope integrates natively with [Vitest](https://vitest.dev) to automatically attribute function-level performance metrics (call frequency, total time, and average latency) to individual tests without wrapping tests in artificial `measure()` APIs or modifying application code.
+
+### 1. Zero-Config Setup
+
+Add `softscopeVitest` to your `vitest.config.ts` or `vite.config.ts`:
+
+```ts
+import { defineConfig } from 'vitest/config';
+import { softscopeVitest } from 'softscope/vitest';
+
+export default defineConfig({
+  plugins: [
+    softscopeVitest({
+      // Optional settings:
+      // json: 'softscope-report.json',   // Export atomic JSON report
+      // baseline: 'baseline.json',       // Compare against saved baseline
+      // saveBaseline: 'baseline.json',   // Save current run as baseline
+      // threshold: 10,                   // Degradation threshold percentage (default: 10%)
+      // minAbsoluteDeltaMs: 1.0,         // Minimum delta in ms to trigger regression warning (default: 1.0ms)
+    })
+  ]
+});
+```
+
+### 2. How It Works
+- **Zero test code changes**: Write standard Vitest tests (`test`, `it`, `describe`). Calls to instrumented application functions are automatically traced and isolated per test attempt.
+- **Strict Async Isolation**: Uses Node's `AsyncLocalStorage` inside a custom `TestRunner` (`runTest`) to guarantee that `test.concurrent` tests and nested async/await operations never leak context or cross-contaminate metrics.
+- **Full Lifecycle Handling**: Handles test retries, failures, timeouts, and dangling timers without masking assertion errors.
+- **Automatic Reporter**: Aggregates metrics across worker threads and prints a clean performance summary table alongside standard Vitest test results.
+
+### 3. Example Test
+
+```ts
+import { test, expect } from 'vitest';
+import { calculateInvoice } from '../src/billing.js';
+
+test('calculates invoice total with tax', async () => {
+  // Existing Softscope instrumentation inside calculateInvoice() is
+  // automatically attributed to this test:
+  const result = await calculateInvoice({ items: [10, 20], taxRate: 0.18 });
+  expect(result.total).toBe(35.4);
+});
+```
+
+### 4. Supported Vitest Versions & Environments
+
+| Dimension | Supported | Notes |
+| :--- | :--- | :--- |
+| **Vitest** | **`>= 1.0.0`** (1.x, 2.x, 3.x+) | Requires Node `>= 20.6.0`. |
+| **Pools / Environments** | `threads`, `forks`, `vmThreads`, `node`, `jsdom`, `happy-dom` | Full async context isolation via Node.js `AsyncLocalStorage`. |
+| **Vitest Browser Mode** | ❌ Not supported | Browser mode runs inside real browsers where Node's `node:async_hooks` is unavailable. For browser profiling, use `softscope/vite` with the in-browser HUD overlay. |
+
+---
+
 ## CLI Options
 
 | Flag | Description |
