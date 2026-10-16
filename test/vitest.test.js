@@ -115,6 +115,40 @@ export const multiply = (a, b) => a * b;
   // Test files themselves must NOT be instrumented
   const testFile = path.join(root, 'src', 'math.test.js');
   assert.equal(plugin.transform(code, testFile), null);
+
+  // Setup files and global-setup must NOT be instrumented
+  const globalSetupFile = path.join(root, 'tests', 'global-setup.js');
+  assert.equal(plugin.transform(code, globalSetupFile), null);
+
+  const vitestSetupFile = path.join(root, 'vitest.setup.ts');
+  assert.equal(plugin.transform(code, vitestSetupFile), null);
+});
+
+test('Vitest Plugin: virtual client proxy safely handles uninitialized globalThis.__softscope without throwing', () => {
+  const plugin = softscopeVitest();
+  const clientCode = plugin.load('\0virtual:softscope-vitest-client');
+
+  assert.ok(clientCode.includes('new Proxy'));
+
+  // Evaluate the proxy code in an isolated scope where globalThis.__softscope is undefined
+  const origSoftscope = globalThis.__softscope;
+  delete globalThis.__softscope;
+
+  try {
+    const executableCode = clientCode
+      .replace(/export\s+default\s+client;?/g, '')
+      .replace(/export\s+const\s+__softscope\s+=\s+client;?/g, '');
+    const fn = new Function(`${executableCode}; return client;`);
+    const client = fn();
+
+    // Calling enter/exit/registerFile on uninitialized proxy must NOT throw TypeError
+    assert.doesNotThrow(() => client.enter(1));
+    assert.doesNotThrow(() => client.exit(1));
+    assert.doesNotThrow(() => client.registerFile('foo.js', []));
+    assert.doesNotThrow(() => client.anyOtherMethod?.());
+  } finally {
+    globalThis.__softscope = origSoftscope;
+  }
 });
 
 test('Vitest Runner: captures instrumented calls without measure() wrapper', async () => {

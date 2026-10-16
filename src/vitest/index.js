@@ -56,6 +56,9 @@ export function softscopeVitest(options = {}) {
     enforce: 'pre',
 
     config(userConfig) {
+      // Initialize fallback globalThis.__softscope in main Vitest process as well
+      sessionManager.init();
+
       userConfig.test = userConfig.test || {};
 
       // 1. Guard against unsupported browser mode
@@ -122,7 +125,23 @@ export function softscopeVitest(options = {}) {
     load(id) {
       const [cleanId] = id.split('?');
       if (cleanId === RESOLVED_VIRTUAL_VITEST_CLIENT_ID || cleanId.includes(VIRTUAL_VITEST_CLIENT_ID)) {
-        return `export default globalThis.__softscope;\nexport const __softscope = globalThis.__softscope;`;
+        return [
+          `const fallback = {`,
+          `  enter: () => {},`,
+          `  exit: () => {},`,
+          `  registerFile: () => {}`,
+          `};`,
+          `const client = new Proxy(fallback, {`,
+          `  get(target, prop) {`,
+          `    if (typeof globalThis !== 'undefined' && globalThis.__softscope && typeof globalThis.__softscope[prop] === 'function') {`,
+          `      return globalThis.__softscope[prop].bind(globalThis.__softscope);`,
+          `    }`,
+          `    return target[prop] || (() => {});`,
+          `  }`,
+          `});`,
+          `export default client;`,
+          `export const __softscope = client;`
+        ].join('\n');
       }
       return null;
     },
@@ -132,12 +151,13 @@ export function softscopeVitest(options = {}) {
 
       const [cleanId] = id.split('?');
 
-      // Skip virtual modules, test files themselves, and softscope internal runtime files
+      // Skip virtual modules, test files, setup/global-setup files, and softscope internal runtime files
       if (
         cleanId.startsWith('\0') ||
         cleanId.includes(VIRTUAL_VITEST_CLIENT_ID) ||
         cleanId.startsWith(SOFTSCOPE_ROOT) ||
-        /\.(test|spec)\.[cm]?[jt]sx?$/.test(cleanId)
+        /\.(test|spec)\.[cm]?[jt]sx?$/.test(cleanId) ||
+        /(global[-_]?setup|vitest\.setup|setup-files?)\.[cm]?[jt]sx?$/i.test(cleanId)
       ) {
         return null;
       }
