@@ -119,6 +119,8 @@ export class SoftscopeVitestReporter {
     if (this.collectedTests.length === 0) {
       if (this.failedOrCancelledCount > 0) {
         writeDirect(`\n⚡ \x1b[33mSoftscope:\x1b[0m No performance metrics captured (${this.failedOrCancelledCount} test(s) failed or cancelled).`);
+      } else {
+        writeDirect(`\n⚡ \x1b[33mSoftscope:\x1b[0m No instrumented function calls observed in executed test(s).`);
       }
       return;
     }

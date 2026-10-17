@@ -65,6 +65,7 @@ export function softscopeVitest(options = {}) {
     enforce: 'pre',
 
     config(userConfig) {
+      process.env.SOFTSCOPE_PROJECT_ROOT = projectRoot;
       // Initialize fallback globalThis.__softscope in main Vitest process as well
       sessionManager.init();
 
@@ -104,17 +105,33 @@ export function softscopeVitest(options = {}) {
         userConfig.test.runner = RUNNER_PATH;
       }
 
+      // Ensure application code is processed through Vite's transform pipeline (even under CJS require)
+      userConfig.test.server = userConfig.test.server || {};
+      userConfig.test.server.deps = userConfig.test.server.deps || {};
+      const existingInline = Array.isArray(userConfig.test.server.deps.inline)
+        ? userConfig.test.server.deps.inline
+        : (userConfig.test.server.deps.inline ? [userConfig.test.server.deps.inline] : []);
+
+      // Inline non-node_modules local source files so Vite transforms them
+      userConfig.test.server.deps.inline = [...existingInline, /^(?!\/?node_modules).*$/];
+
       return {
         test: {
           runner: userConfig.test.runner,
           setupFiles: existingSetup,
-          reporters: userConfig.test.reporters
+          reporters: userConfig.test.reporters,
+          server: {
+            deps: {
+              inline: userConfig.test.server.deps.inline
+            }
+          }
         }
       };
     },
 
     configResolved(resolvedConfig) {
       projectRoot = resolvedConfig.root ? path.resolve(resolvedConfig.root) : process.cwd();
+      process.env.SOFTSCOPE_PROJECT_ROOT = projectRoot;
       filter = null;
 
       // Ensure reporter is registered in resolvedConfig in case CLI flags stripped it

@@ -1,4 +1,5 @@
 import { als, sessionManager } from './context.js';
+import { resolveVitestModule } from './resolver.js';
 
 /**
  * Resolves the underlying TestRunner class from Vitest.
@@ -6,19 +7,19 @@ import { als, sessionManager } from './context.js';
  */
 async function resolveBaseRunner() {
   try {
-    const mod = await import('vitest/runners');
-    if (mod.TestRunner) return mod.TestRunner;
-    if (mod.VitestTestRunner) return mod.VitestTestRunner;
+    const mod = await resolveVitestModule('vitest/runners');
+    if (mod && mod.VitestTestRunner) return mod.VitestTestRunner;
+    if (mod && mod.TestRunner) return mod.TestRunner;
   } catch {}
   try {
-    const mod = await import('@vitest/runner');
-    if (mod.TestRunner) return mod.TestRunner;
-    if (mod.VitestTestRunner) return mod.VitestTestRunner;
+    const mod = await resolveVitestModule('@vitest/runner');
+    if (mod && mod.VitestTestRunner) return mod.VitestTestRunner;
+    if (mod && mod.TestRunner) return mod.TestRunner;
   } catch {}
   try {
-    const mod = await import('vitest');
-    if (mod.TestRunner) return mod.TestRunner;
-    if (mod.VitestTestRunner) return mod.VitestTestRunner;
+    const mod = await resolveVitestModule('vitest');
+    if (mod && mod.VitestTestRunner) return mod.VitestTestRunner;
+    if (mod && mod.TestRunner) return mod.TestRunner;
   } catch {}
 
   // Fallback runner when executed in mock or custom harness environments
@@ -62,21 +63,17 @@ export class SoftscopeTestRunner extends BaseRunner {
     sessionManager.init();
   }
 
-  async runTest(test) {
+  async _runWithSession(test, executeFn) {
     // Skip if test is intentionally disabled or ignored
     if (test?.mode === 'skip' || test?.mode === 'todo') {
-      return super.runTest ? super.runTest(test) : undefined;
+      return executeFn();
     }
 
     const session = sessionManager.createSession(test);
 
     return als.run(session, async () => {
       try {
-        if (super.runTest) {
-          await super.runTest(test);
-        } else if (typeof test?.fn === 'function') {
-          await test.fn();
-        }
+        return await executeFn();
       } finally {
         try {
           session.close();
@@ -91,6 +88,32 @@ export class SoftscopeTestRunner extends BaseRunner {
           // Never mask real test assertions or worker crash errors
           console.error('[softscope] Error finalizing test session metrics:', cleanupErr);
         }
+      }
+    });
+  }
+
+  async runTask(test) {
+    return this._runWithSession(test, async () => {
+      if (super.runTask) {
+        return await super.runTask(test);
+      }
+      const fn = typeof this.getTestFn === 'function' ? this.getTestFn(test) : test?.fn;
+      if (typeof fn === 'function') {
+        return await fn();
+      }
+    });
+  }
+
+  async runTest(test) {
+    return this._runWithSession(test, async () => {
+      if (super.runTest) {
+        return await super.runTest(test);
+      }
+      if (super.runTask) {
+        return await super.runTask(test);
+      }
+      if (typeof test?.fn === 'function') {
+        return await test.fn();
       }
     });
   }

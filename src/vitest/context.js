@@ -1,21 +1,21 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { CallStack } from '../runtime/stack.js';
 
-export const als = new AsyncLocalStorage();
+export const als = globalThis.__softscope_vitest_als || (globalThis.__softscope_vitest_als = new AsyncLocalStorage());
 
 /**
  * Worker-wide registry of instrumented function metadata.
  * Populated via __softscope.registerFile(filePath, functions).
  */
-export const fileRegistry = new Map(); // id -> FunctionMetadata
+export const fileRegistry = globalThis.__softscope_vitest_registry || (globalThis.__softscope_vitest_registry = new Map()); // id -> FunctionMetadata
 
 /**
  * Global counters for unattributed or out-of-session calls.
  */
-export const globalStats = {
+export const globalStats = globalThis.__softscope_vitest_stats || (globalThis.__softscope_vitest_stats = {
   unattributedCalls: 0,
   lateCalls: 0
-};
+});
 
 export class TestSession {
   /**
@@ -157,17 +157,24 @@ export class TestSession {
 export class SessionManager {
   constructor() {
     this.activeSessions = new Map(); // sessionId -> TestSession
+    this.currentActiveSession = null;
   }
 
   init() {
     if (globalThis.__softscope && globalThis.__softscope._isVitest) {
+      globalThis.__softscope._sessionManager = this;
+      globalThis.__softscope._als = als;
+      globalThis.__softscope._registry = fileRegistry;
       return;
     }
 
+    const self = this;
     globalThis.__softscope = {
       _isVitest: true,
       enter: (id, args) => {
-        const session = als.getStore();
+        const store = als.getStore();
+        const fallback = self.currentActiveSession;
+        const session = store || fallback;
         if (session) {
           session.enter(id, args);
         } else {
@@ -175,8 +182,10 @@ export class SessionManager {
         }
       },
       exit: (id, isError) => {
-        const session = als.getStore();
-        if (session) {
+        const store = als.getStore();
+        const fallback = self.currentActiveSession;
+        const session = store || fallback;
+        if (session && session.isActive()) {
           session.exit(id, isError);
         }
       },
@@ -215,11 +224,12 @@ export class SessionManager {
     });
 
     this.activeSessions.set(session.sessionId, session);
+    this.currentActiveSession = session;
     return session;
   }
 
   getActiveSession() {
-    return als.getStore() || null;
+    return als.getStore() || this.currentActiveSession || null;
   }
 }
 
@@ -247,4 +257,4 @@ export function getTaskFilePath(task) {
   return 'unknown';
 }
 
-export const sessionManager = new SessionManager();
+export const sessionManager = globalThis.__softscope_vitest_session_manager || (globalThis.__softscope_vitest_session_manager = new SessionManager());
